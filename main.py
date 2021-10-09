@@ -194,7 +194,7 @@ def train_model(optimizer,
     else:
         ds = MoseiDataset
 
-    train_dataset = ds(gc.data_path, cls="train")
+    train_dataset = ds(gc.data_path, clas="train")
     train_loader = Data.DataLoader(
         dataset=train_dataset,
         batch_size=gc.config['batch_size'],
@@ -202,7 +202,7 @@ def train_model(optimizer,
         num_workers=1,
     )
 
-    test_dataset = ds(gc.data_path, cls="test")
+    test_dataset = ds(gc.data_path, clas="test")
     test_loader = Data.DataLoader(
         dataset=test_dataset,
         batch_size=gc.config['batch_size'],
@@ -210,7 +210,7 @@ def train_model(optimizer,
         num_workers=1,
     )
 
-    valid_dataset = ds(gc.data_path, cls="valid")
+    valid_dataset = ds(gc.data_path, clas="valid")
     valid_loader = Data.DataLoader(
         dataset=valid_dataset,
         batch_size=gc.config['batch_size'],
@@ -678,7 +678,7 @@ def eval_model(resume_pt):
     else:
         ds = MoseiDataset
 
-    test_dataset = ds(gc.data_path, cls="test")
+    test_dataset = ds(gc.data_path, clas="test")
     test_loader = Data.DataLoader(
         dataset=test_dataset,
         batch_size=gc.config['batch_size'],
@@ -1000,10 +1000,8 @@ def assign_args_to_gc(args):
 if __name__ == "__main__":
 
     args = get_arguments()
-
     assert args.dataroot is not None, "You havn't provided the dataset path! Use the default one."
     gc.data_path = args.dataroot
-
     args.optimizer, args.task = args.optimizer.lower(), args.task.lower()
     assert args.task in ['mosi', 'mosei', 'mosi_unaligned', 'mosei_unaligned', 'iemocap', 'iemocap_unaligned'], "Unsupported task. Should be either mosi or mosei"
     gc.dataset = args.task
@@ -1022,9 +1020,9 @@ if __name__ == "__main__":
                 # logging.getLogger().addHandler(logging.StreamHandler())
 
             # snapshot code to a zip file
-            util.snapshot_code_to_zip(code_path=pathlib.Path(__file__).parent.absolute(),
-                                      snapshot_zip_output_dir=gc.log_path,
-                                      snapshot_zip_output_file_name=f'code_snapshot_{now}.zip')
+            # util.snapshot_code_to_zip(code_path=pathlib.Path(__file__).parent.absolute(),
+            #                           snapshot_zip_output_dir=gc.log_path,
+            #                           snapshot_zip_output_file_name=f'code_snapshot_{now}.zip')
 
         start_time = time.time()
         logging.info('Start time: ' + time.strftime("%H:%M:%S", time.gmtime(start_time)))

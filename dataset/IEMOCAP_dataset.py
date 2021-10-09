@@ -20,19 +20,19 @@ class IemocapDataset(Data.Dataset):
     testset = MultimodalSubdata("test")
     validset = MultimodalSubdata("valid")
 
-    def __init__(self, root, cls="train"):
+    def __init__(self, root, clas="train"):
         self.root = root
-        self.cls = cls
-        if len(IemocapDataset.trainset.y) != 0 and cls != "train":
+        self.clas = clas
+        if len(IemocapDataset.trainset.y) != 0 and clas != "train":
             print("Data has been previously loaded, fetching from previous lists.")
         else:
             self.load_data()
 
-        if self.cls == "train":
+        if self.clas == "train":
             self.dataset = IemocapDataset.trainset
-        elif self.cls == "test":
+        elif self.clas == "test":
             self.dataset = IemocapDataset.testset
-        elif self.cls == "valid":
+        elif self.clas == "valid":
             self.dataset = IemocapDataset.validset
 
         self.text = self.dataset.text
@@ -73,19 +73,19 @@ class IemocapDatasetUnaligned(Data.Dataset):
     testset = MultimodalSubdata("test")
     validset = MultimodalSubdata("valid")
 
-    def __init__(self, root, cls="train"):
+    def __init__(self, root, clas="train"):
         self.root = root
-        self.cls = cls
-        if len(IemocapDatasetUnaligned.trainset.y) != 0 and cls != "train":
+        self.clas = clas
+        if len(IemocapDatasetUnaligned.trainset.y) != 0 and clas != "train":
             print("Data has been previously loaded, fetching from previous lists.")
         else:
             self.load_data()
 
-        if self.cls == "train":
+        if self.clas == "train":
             self.dataset = IemocapDatasetUnaligned.trainset
-        elif self.cls == "test":
+        elif self.clas == "test":
             self.dataset = IemocapDatasetUnaligned.testset
-        elif self.cls == "valid":
+        elif self.clas == "valid":
             self.dataset = IemocapDatasetUnaligned.validset
 
         self.text = self.dataset.text

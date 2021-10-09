@@ -358,12 +358,12 @@ class MessagePassing(torch.nn.Module):
             template = Template(f.read())
 
         uid = uuid1().hex[:6]
-        cls_name = f'{self.__class__.__name__}Jittable_{uid}'
+        clas_name = f'{self.__class__.__name__}Jittable_{uid}'
         jit_module_repr = template.render(
             uid=uid,
             module=str(self.__class__.__module__),
-            cls_name=cls_name,
-            parent_cls_name=self.__class__.__name__,
+            clas_name=clas_name,
+            parent_clas_name=self.__class__.__name__,
             prop_types=prop_types,
             collect_types=collect_types,
             user_args=self.__user_args__,
@@ -379,8 +379,8 @@ class MessagePassing(torch.nn.Module):
         )
 
         # Instantiate a class from the rendered JIT module representation.
-        cls = class_from_module_repr(cls_name, jit_module_repr)
-        module = cls.__new__(cls)
+        clas = class_from_module_repr(clas_name, jit_module_repr)
+        module = clas.__new__(clas)
         module.__dict__ = self.__dict__.copy()
         module.jittable = None
 

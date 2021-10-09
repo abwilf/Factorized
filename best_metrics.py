@@ -92,7 +92,7 @@ class Best():
             max_iemocap_acc[sp][em] = -1
             best_iemocap_epoch[sp][em] = -1
 
-    pom_cls = ["Confidence", "Passionate", "Voice pleasant", "Dominant", "Credible", "Vivid", "Expertise",
+    pom_clas = ["Confidence", "Passionate", "Voice pleasant", "Dominant", "Credible", "Vivid", "Expertise",
                "Entertaining", "Reserved", "Trusting", "Relaxed", "Outgoing", "Thorough",
                "Nervous", "Sentiment", "Persuasive", "Humorous"]
 
@@ -100,11 +100,11 @@ class Best():
     for metric in ['acc', 'corr']:
         for sp in split:
             max_pom_metrics[metric][sp] = {}
-            for cls in pom_cls:
-                max_pom_metrics[metric][sp][cls] = -1
+            for clas in pom_clas:
+                max_pom_metrics[metric][sp][clas] = -1
 
     best_pom_mae = {}
     for sp in split:
         best_pom_mae[sp] = {}
-        for cls in pom_cls:
-            best_pom_mae[sp][cls] = 9999
+        for clas in pom_clas:
+            best_pom_mae[sp][clas] = 9999

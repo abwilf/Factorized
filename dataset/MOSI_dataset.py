@@ -18,19 +18,19 @@ class MosiDataset(Data.Dataset):
     testset = MultimodalSubdata("test")
     validset = MultimodalSubdata("valid")
 
-    def __init__(self, root, cls="train"):
+    def __init__(self, root, clas="train"):
         self.root = root
-        self.cls = cls
-        if len(MosiDataset.trainset.y) != 0 and cls != "train":
+        self.clas = clas
+        if len(MosiDataset.trainset.y) != 0 and clas != "train":
             print("Data has been previously loaded, fetching from previous lists.")
         else:
             self.load_data()
 
-        if self.cls == "train":
+        if self.clas == "train":
             self.dataset = MosiDataset.trainset
-        elif self.cls == "test":
+        elif self.clas == "test":
             self.dataset = MosiDataset.testset
-        elif self.cls == "valid":
+        elif self.clas == "valid":
             self.dataset = MosiDataset.validset
 
         self.text = self.dataset.text
