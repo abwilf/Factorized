@@ -163,6 +163,9 @@ from torch_geometric.loader import DataLoader
 import torch_geometric.transforms as T
 
 def get_fc_combinations(idxs_a, idxs_b): # get array of shape (2, len(idxs_a)*len(idxs_b)) for use in edge_index
+    if len(idxs_a) == 0 or len(idxs_b) == 0:
+        return torch.zeros((2,0))
+    
     return torch.from_numpy(np.array(np.meshgrid(idxs_a, idxs_b)).reshape((-1, len(idxs_a)*len(idxs_b)))).to(torch.long)
 
 def get_loader(ds):
@@ -170,30 +173,49 @@ def get_loader(ds):
     covarep = ds[:][1]
     facet = ds[:][2]
 
-    edge_idxs = get_fc_combinations(np.arange(words.shape[-2]), np.arange(covarep.shape[-2]))
-
     total_data = []
     for i in range(words.shape[0]):
-        data = HeteroData({
-            'words': {'x': words[i]},
-            'covarep': {'x': covarep[i]},
-            'facet': {'x': facet[i]},
+        # get masks, use those to only add edges from non-padded portions
+        mask_words = (np.prod((words[i]==0).numpy(), axis=-1) + 1) % 2
+        mask_covarep = (np.prod((covarep[i]==0).numpy(), axis=-1) + 1) % 2
+        mask_facet = (np.prod((facet[i]==0).numpy(), axis=-1) + 1) % 2
+        mask = np.logical_or(np.logical_or(mask_words, mask_covarep), mask_facet).astype('int')
 
-            ('words', 'words_covarep', 'covarep'): {'edge_index': edge_idxs},
-            ('words', 'words_facet', 'facet'): {'edge_index': edge_idxs},
-            ('facet', 'facet_covarep', 'covarep'): {'edge_index': edge_idxs},
-            ('facet', 'facet_words', 'words'): {'edge_index': edge_idxs},
-            ('covarep', 'covarep_words', 'words'): {'edge_index': edge_idxs},
-            ('covarep', 'covarep_facet', 'facet'): {'edge_index': edge_idxs},
+        start_idx = np.where(mask)[0].min()
+        end_idx = mask.shape[0]
+
+        idxs = np.arange(start_idx, end_idx)
+        zero_idxs = idxs - idxs.min()
+        edge_idxs = get_fc_combinations(zero_idxs, zero_idxs)
+        assert edge_idxs.max() == words[i][idxs].shape[0] - 1 # edge case where there was a zero vector in the middle of the sequence that was 0 across all modalities
+
+        data = HeteroData({
+            'words': {'x': words[i][idxs]},
+            'covarep': {'x': covarep[i][idxs]},
+            'facet': {'x': facet[i][idxs]},
+            
+            ('words', 'words_words', 'words'): {'edge_index': torch.clone(edge_idxs)},
+            ('facet', 'facet_facet', 'facet'): {'edge_index': torch.clone(edge_idxs)},
+            ('covarep', 'covarep_covarep', 'covarep'): {'edge_index': torch.clone(edge_idxs)},
+            
+            ('words', 'words_covarep', 'covarep'): {'edge_index': torch.clone(edge_idxs)},
+            ('words', 'words_facet', 'facet'): {'edge_index': torch.clone(edge_idxs)},
+            ('facet', 'facet_covarep', 'covarep'): {'edge_index': torch.clone(edge_idxs)},
+            ('facet', 'facet_words', 'words'): {'edge_index': torch.clone(edge_idxs)},
+            ('covarep', 'covarep_words', 'words'): {'edge_index': torch.clone(edge_idxs)},
+            ('covarep', 'covarep_facet', 'facet'): {'edge_index': torch.clone(edge_idxs)},
 
         })
         data = T.AddSelfLoops()(data)
+        data.y = ds[i][-1]
         total_data.append(data)
 
-    loader = DataLoader(total_data, batch_size=32)
+    loader = DataLoader(total_data, batch_size=gc.config['batch_size'])
     batch = next(iter(loader))
     print(batch)
     return loader
+
+from torch_geometric.nn import Linear
 
 def train_model(optimizer, use_gnn=True, exclude_vision=False, exclude_audio=False, exclude_text=False, average_mha=False, num_gat_layers=1, lr_scheduler=None, reduce_on_plateau_lr_scheduler_patience=None, reduce_on_plateau_lr_scheduler_threshold=None, multi_step_lr_scheduler_milestones=None, exponential_lr_scheduler_gamma=None, use_pe=False, use_prune=False):
     assert lr_scheduler in ['reduce_on_plateau', 'exponential', 'multi_step',
@@ -222,39 +244,134 @@ def train_model(optimizer, use_gnn=True, exclude_vision=False, exclude_audio=Fal
     train_dataset = ds(gc.data_path, clas="train")
     test_dataset = ds(gc.data_path, clas="test")
     valid_dataset = ds(gc.data_path, clas="valid")
-    
+
     train_loader, train_labels = get_loader(train_dataset), train_dataset[:][-1]
     valid_loader, valid_labels = get_loader(valid_dataset), valid_dataset[:][-1]
     test_loader, test_labels = get_loader(test_dataset), test_dataset[:][-1]
     
-    hey = 2
+    from torch_geometric.nn import HeteroConv, GCNConv, SAGEConv, GATConv, Linear
+    from torch_scatter import scatter_mean
+    import torch.nn.functional as F
 
-    # from torch_geometric.nn import HeteroConv, GCNConv, SAGEConv, GATConv, Linear
+    class HeteroGNN(torch.nn.Module):
+        def __init__(self, hidden_channels, out_channels, num_layers):
+            super().__init__()
+            
+            self.hidden_channels = hidden_channels
+            self.heads = 4
+            
+            self.lin_dict = torch.nn.ModuleDict()
+            for node_type in ['words', 'covarep', 'facet']:
+                self.lin_dict[node_type] = Linear(-1, hidden_channels)
 
-    # class HeteroGNN(torch.nn.Module):
-    #     def __init__(self, hidden_channels, out_channels, num_layers):
-    #         super().__init__()
+            self.convs = torch.nn.ModuleList()
+            for _ in range(num_layers):
+                conv = HeteroConv({
+                    ('words', 'words_words', 'words'): GATConv((-1,-1), hidden_channels//self.heads, heads=self.heads),
+                    ('facet', 'facet_facet', 'facet'): GATConv((-1,-1), hidden_channels//self.heads, heads=self.heads),
+                    ('covarep', 'covarep_covarep', 'covarep'): GATConv((-1,-1), hidden_channels//self.heads, heads=self.heads),
+                    ('words', 'words_covarep', 'covarep'): GATConv((-1,-1), hidden_channels//self.heads, heads=self.heads),
+                    ('words', 'words_facet', 'facet'): GATConv((-1,-1), hidden_channels//self.heads, heads=self.heads),
+                    ('facet', 'facet_covarep', 'covarep'): GATConv((-1,-1), hidden_channels//self.heads, heads=self.heads),
+                    ('facet', 'facet_words', 'words'): GATConv((-1,-1), hidden_channels//self.heads, heads=self.heads),
+                    ('covarep', 'covarep_words', 'words'): GATConv((-1,-1), hidden_channels//self.heads, heads=self.heads),
+                    ('covarep', 'covarep_facet', 'facet'): GATConv((-1,-1), hidden_channels//self.heads, heads=self.heads),
 
-    #         self.convs = torch.nn.ModuleList()
-    #         for _ in range(num_layers):
-    #             conv = HeteroConv({
-    #                 ('paper', 'cites', 'paper'): GCNConv(-1, hidden_channels)
-    #                 ('author', 'writes', 'paper'): GATConv((-1, -1), hidden_channels)
-    #                 ('author', 'affiliated_with', 'institution'): SAGEConv((-1, -1), hidden_channels)
-    #             }, aggr='sum')
-    #             self.convs.append(conv)
+                }, aggr='sum')
+                self.convs.append(conv)
 
-    #         self.lin = Linear(hidden_channels, out_channels)
+            self.finalW = nn.Sequential(
+                Linear(-1, hidden_channels // 4),
+                nn.ReLU(),
+                # nn.Linear(hidden_channels // 4, label_dim),
+                Linear(hidden_channels // 4, hidden_channels // 4),
+                nn.ReLU(),
+                Linear(hidden_channels // 4, out_channels),
+            )
 
-    # def forward(self, x_dict, edge_index_dict):
-    #     for conv in self.convs:
-    #         x_dict = conv(x_dict, edge_index_dict)
-    #         x_dict = {key: x.relu() for key, x in x_dict.items()}
-    #     return self.lin(x_dict['author'])
+        def forward(self, x_dict, edge_index_dict, batch_dict):
+            x_dict = {key: self.lin_dict[key](x) for key, x in x_dict.items()}
 
-    # model = HeteroGNN(hidden_channels=64, out_channels=dataset.num_classes,
-    #                 num_layers=2)
+            for conv in self.convs:
+                x_dict = conv(x_dict, edge_index_dict)
+                x_dict = {key: x.relu() for key, x in x_dict.items()}
+
+            # readout: avg nodes (no pruning yet!)
+            x = torch.cat([v for v in x_dict.values()], axis=0)
+            batch_dicts = torch.cat([v for v in batch_dict.values()], axis=0)
+            x = scatter_mean(x,batch_dicts, dim=0)
+
+            return self.finalW(x).squeeze(axis=-1)
+
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    # device = 'cpu'
     
+    model = HeteroGNN(hidden_channels=64, out_channels=1, num_layers=6)
+    model = model.to(device)
+    
+    optimizer = torch.optim.AdamW(
+        model.parameters(), 
+        lr=gc.config['global_lr'],
+        weight_decay=gc.config['weight_decay']
+    )
+    actual_lr_scheduler = ReduceLROnPlateau(optimizer, factor=0.5, patience=10, threshold=.002)
+
+    def train(train_loader):
+        total_loss, total_examples = 0,0
+        accs = []
+
+        for data in train_loader:
+            data = data.to(device)
+
+            with torch.no_grad():  # Initialize lazy modules.
+                out = model(data.x_dict, data.edge_index_dict, data.batch_dict)
+
+            model.train()
+            optimizer.zero_grad()
+            out = model(data.x_dict, data.edge_index_dict, data.batch_dict)
+
+            loss = F.mse_loss(out, data.y)
+            
+            # norm
+            loss = loss / torch.abs(loss.detach())
+
+            loss.backward()
+            optimizer.step()
+            total_loss += float(loss)
+            total_examples += data.num_graphs
+
+            y_true = (data.y >= 0).detach().cpu().numpy()
+            y_pred = (out >= 0).detach().cpu().numpy()
+            accs.append(accuracy_score(y_true, y_pred))
+
+        return total_loss / total_examples, float(np.mean(accs))
+
+    from sklearn.metrics import accuracy_score
+
+    @torch.no_grad()
+    def test(loader):
+        mse = []
+        accs = []
+        model.eval()
+
+        for data in loader:
+            data = data.to(device)
+            out = model(data.x_dict, data.edge_index_dict, data.batch_dict)
+            mse.append(F.mse_loss(out, data.y, reduction='none').cpu())
+            
+            y_true = (data.y >= 0).detach().cpu().numpy()
+            y_pred = (out >= 0).detach().cpu().numpy()
+            accs.append(accuracy_score(y_true, y_pred))
+
+        return float(torch.cat(mse, dim=0).mean().sqrt()), float(np.mean(accs))
+        
+    for epoch in range(1, 101):
+        loss, train_acc = train(train_loader)
+        valid_loss, valid_acc = test(valid_loader)
+        test_loss, test_acc = test(test_loader)
+        print(f'Epoch: {epoch:03d}, Loss: {loss:.4f}, Train: {train_acc:.4f}, '
+            f'Valid: {valid_acc:.4f}, Test: {test_acc:.4f}')
+
 
 
 
