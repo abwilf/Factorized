@@ -27,6 +27,7 @@ import logging
 import util
 import pathlib
 
+from alex_utils import *
 import standard_grid
 
 
@@ -168,6 +169,38 @@ def get_fc_combinations(idxs_a, idxs_b): # get array of shape (2, len(idxs_a)*le
     
     return torch.from_numpy(np.array(np.meshgrid(idxs_a, idxs_b)).reshape((-1, len(idxs_a)*len(idxs_b)))).to(torch.long)
 
+@memoized
+def get_idxs(a, b, conn_type):
+    '''
+    a is the length of the indices array for src, b is same for tar
+    get all indeces between a (src) and b (tar) according to conn_type.  if present, only choose indices that match.  if past, all a indices must be > b indices
+    '''
+    a = np.arange(a)
+    b = np.arange(b)
+    
+    tot = np.array(list(product(a,b)))
+    a_idxs, b_idxs = tot[:,0], tot[:,1]
+
+    if conn_type=='past':
+        return tot[a_idxs>b_idxs].T
+    elif conn_type=='pres':
+        return tot[a_idxs==b_idxs].T
+    elif conn_type=='fut':
+        return tot[a_idxs<b_idxs].T
+    else: 
+        assert False
+
+
+# get all connection types for declaring heteroconv later
+mods = ['text', 'audio', 'video']
+conn_types = ['past', 'pres', 'fut']
+all_connections = []
+for mod in mods:
+    for mod2 in mods:
+        for conn_type in conn_types:
+            all_connections.append((mod, conn_type, mod2))
+
+
 def get_loader(ds):
     words = ds[:][0]
     covarep = ds[:][1]
@@ -189,30 +222,51 @@ def get_loader(ds):
         edge_idxs = get_fc_combinations(zero_idxs, zero_idxs)
         assert edge_idxs.max() == words[i][idxs].shape[0] - 1 # edge case where there was a zero vector in the middle of the sequence that was 0 across all modalities
 
-        data = HeteroData({
-            'words': {'x': words[i][idxs]},
-            'covarep': {'x': covarep[i][idxs]},
-            'facet': {'x': facet[i][idxs]},
-            
-            ('words', 'words_words', 'words'): {'edge_index': torch.clone(edge_idxs)},
-            ('facet', 'facet_facet', 'facet'): {'edge_index': torch.clone(edge_idxs)},
-            ('covarep', 'covarep_covarep', 'covarep'): {'edge_index': torch.clone(edge_idxs)},
-            
-            ('words', 'words_covarep', 'covarep'): {'edge_index': torch.clone(edge_idxs)},
-            ('words', 'words_facet', 'facet'): {'edge_index': torch.clone(edge_idxs)},
-            ('facet', 'facet_covarep', 'covarep'): {'edge_index': torch.clone(edge_idxs)},
-            ('facet', 'facet_words', 'words'): {'edge_index': torch.clone(edge_idxs)},
-            ('covarep', 'covarep_words', 'words'): {'edge_index': torch.clone(edge_idxs)},
-            ('covarep', 'covarep_facet', 'facet'): {'edge_index': torch.clone(edge_idxs)},
+        hetero_data = {
+            'text': {'x': words[i][idxs]},
+            'audio': {'x': covarep[i][idxs]},
+            'video': {'x': facet[i][idxs]},
+        }
 
-        })
-        data = T.AddSelfLoops()(data)
-        data.y = ds[i][-1]
-        total_data.append(data)
+        # hetero_data2 = {
+        #     'words': {'x': words[i][idxs]},
+        #     'covarep': {'x': covarep[i][idxs]},
+        #     'facet': {'x': facet[i][idxs]},
+            
+        #     ('words', 'words_words', 'words'): {'edge_index': torch.clone(edge_idxs)},
+        #     ('facet', 'facet_facet', 'facet'): {'edge_index': torch.clone(edge_idxs)},
+        #     ('covarep', 'covarep_covarep', 'covarep'): {'edge_index': torch.clone(edge_idxs)},
+            
+        #     ('words', 'words_covarep', 'covarep'): {'edge_index': torch.clone(edge_idxs)},
+        #     ('words', 'words_facet', 'facet'): {'edge_index': torch.clone(edge_idxs)},
+        #     ('facet', 'facet_covarep', 'covarep'): {'edge_index': torch.clone(edge_idxs)},
+        #     ('facet', 'facet_words', 'words'): {'edge_index': torch.clone(edge_idxs)},
+        #     ('covarep', 'covarep_words', 'words'): {'edge_index': torch.clone(edge_idxs)},
+        #     ('covarep', 'covarep_facet', 'facet'): {'edge_index': torch.clone(edge_idxs)}
+        # }
+
+        # build hetero data dict
+        for mod in mods:
+            for conn_type in conn_types:
+                num_idxs = 0
+                for mod2 in mods:
+                    mod_idxs = len(hetero_data[mod]['x'])
+                    mod2_idxs = len(hetero_data[mod2]['x'])
+                    assert (mod, conn_type, mod2) not in hetero_data
+                    hetero_data[(mod, conn_type, mod2)] = {'edge_index': torch.Tensor(get_idxs(mod_idxs, mod2_idxs, conn_type)).to(torch.long)}
+                    
+
+        hetero_data = HeteroData(hetero_data)
+        
+        # hetero_data = hetero_data2
+        # hetero_data2 = HeteroData(hetero_data2)
+
+        hetero_data = T.AddSelfLoops()(hetero_data) # todo: include this as a HP to see if it does anything!
+        hetero_data.y = ds[i][-1]
+        total_data.append(hetero_data)
 
     loader = DataLoader(total_data, batch_size=gc.config['batch_size'])
     batch = next(iter(loader))
-    print(batch)
     return loader
 
 from torch_geometric.nn import Linear
@@ -249,7 +303,7 @@ def train_model(optimizer, use_gnn=True, exclude_vision=False, exclude_audio=Fal
     valid_loader, valid_labels = get_loader(valid_dataset), valid_dataset[:][-1]
     test_loader, test_labels = get_loader(test_dataset), test_dataset[:][-1]
     
-    from torch_geometric.nn import HeteroConv, GCNConv, SAGEConv, GATConv, Linear
+    from torch_geometric.nn import HeteroConv, GCNConv, SAGEConv, GATConv, GATv2Conv, Linear
     from torch_scatter import scatter_mean
     import torch.nn.functional as F
 
@@ -261,22 +315,14 @@ def train_model(optimizer, use_gnn=True, exclude_vision=False, exclude_audio=Fal
             self.heads = 4
             
             self.lin_dict = torch.nn.ModuleDict()
-            for node_type in ['words', 'covarep', 'facet']:
+            for node_type in mods:
                 self.lin_dict[node_type] = Linear(-1, hidden_channels)
 
             self.convs = torch.nn.ModuleList()
             for _ in range(num_layers):
                 conv = HeteroConv({
-                    ('words', 'words_words', 'words'): GATConv((-1,-1), hidden_channels//self.heads, heads=self.heads),
-                    ('facet', 'facet_facet', 'facet'): GATConv((-1,-1), hidden_channels//self.heads, heads=self.heads),
-                    ('covarep', 'covarep_covarep', 'covarep'): GATConv((-1,-1), hidden_channels//self.heads, heads=self.heads),
-                    ('words', 'words_covarep', 'covarep'): GATConv((-1,-1), hidden_channels//self.heads, heads=self.heads),
-                    ('words', 'words_facet', 'facet'): GATConv((-1,-1), hidden_channels//self.heads, heads=self.heads),
-                    ('facet', 'facet_covarep', 'covarep'): GATConv((-1,-1), hidden_channels//self.heads, heads=self.heads),
-                    ('facet', 'facet_words', 'words'): GATConv((-1,-1), hidden_channels//self.heads, heads=self.heads),
-                    ('covarep', 'covarep_words', 'words'): GATConv((-1,-1), hidden_channels//self.heads, heads=self.heads),
-                    ('covarep', 'covarep_facet', 'facet'): GATConv((-1,-1), hidden_channels//self.heads, heads=self.heads),
-
+                    conn_type: GATv2Conv(-1, hidden_channels//self.heads, heads=self.heads)
+                    for conn_type in all_connections
                 }, aggr='sum')
                 self.convs.append(conv)
 
