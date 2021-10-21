@@ -266,7 +266,8 @@ def get_loader(ds):
         total_data.append(hetero_data)
 
     loader = DataLoader(total_data, batch_size=gc.config['batch_size'])
-    batch = next(iter(loader))
+    # loader = DataLoader(total_data, batch_size=2)
+    # batch = next(iter(loader))
     return loader
 
 from torch_geometric.nn import Linear
@@ -339,8 +340,37 @@ def train_model(optimizer, use_gnn=True, exclude_vision=False, exclude_audio=Fal
             x_dict = {key: self.lin_dict[key](x) for key, x in x_dict.items()}
 
             for conv in self.convs:
-                x_dict = conv(x_dict, edge_index_dict)
-                x_dict = {key: x.relu() for key, x in x_dict.items()}
+                # x_dict = conv(x_dict, edge_index_dict)
+                x_dict, edge_types = conv(x_dict, edge_index_dict, return_attention_weights_dict={elt: True for elt in all_connections})
+
+                '''
+                x_dict: {
+                  modality: (
+                      a -> tensor of shape batch_num_nodes (number of distinct modality nodes concatenated from across whole batch),
+                      b -> [
+                        (
+                            edge_idxs; shape (2, num_edges) where num_edges changes depending on edge_type (and pruning),
+                            attention weights; shape (num_edges, num_heads)
+                        )
+                      ] of length 9 b/c one for each edge type where text modality is dst, in same order as edge_types[modality] list
+                  )
+                }
+                '''
+
+
+                # attn_dict = {
+                #     k: {
+                #         edge_type: {
+                #             'edge_idxs': edge_idxs,
+                #             'attn_weights': attn_weights,
+                #         }
+                #         for edge_type, (edge_idxs, attn_weights) in zip(edge_types[k], v[1])
+                #     } 
+                #     for k, v in x_dict.items()
+                # }
+                
+                
+                x_dict = {key: x[0].relu() for key, x in x_dict.items()}
 
             # readout: avg nodes (no pruning yet!)
             x = torch.cat([v for v in x_dict.values()], axis=0)
@@ -366,11 +396,12 @@ def train_model(optimizer, use_gnn=True, exclude_vision=False, exclude_audio=Fal
         total_loss, total_examples = 0,0
         accs = []
 
-        for data in train_loader:
+        for batch_i, data in enumerate(train_loader): # need index to prune edges
             data = data.to(device)
 
-            with torch.no_grad():  # Initialize lazy modules.
-                out = model(data.x_dict, data.edge_index_dict, data.batch_dict)
+            if batch_i == 0:
+                with torch.no_grad():  # Initialize lazy modules.
+                    out = model(data.x_dict, data.edge_index_dict, data.batch_dict)
 
             model.train()
             optimizer.zero_grad()
@@ -389,6 +420,13 @@ def train_model(optimizer, use_gnn=True, exclude_vision=False, exclude_audio=Fal
             y_true = (data.y >= 0).detach().cpu().numpy()
             y_pred = (out >= 0).detach().cpu().numpy()
             accs.append(accuracy_score(y_true, y_pred))
+
+            # pruning
+            # with torch.no_grad():
+                # if batch_i == 0:
+                    # for j in gc.config['batch_size']:
+                    # train_loader.dataset[0]['video', 'fut', 'video']['edge_index'] = torch.Tensor(2,0).to(torch.long)
+                    # gc.config['batch_size']
 
         return total_loss / total_examples, float(np.mean(accs))
 
