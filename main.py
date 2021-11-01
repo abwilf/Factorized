@@ -11,10 +11,10 @@ import sys
 import time
 import h5py
 from torch.optim.lr_scheduler import ReduceLROnPlateau
-from tqdm import trange
+from tqdm import trange, tqdm
 import numpy as np
 from sklearn.metrics import accuracy_score, f1_score, confusion_matrix
-
+import gc as g
 from graph_model.iemocap_inverse_sample_count_ce_loss import IEMOCAPInverseSampleCountCELoss
 from consts import GlobalConsts as gc
 from model import NetMTGATAverageUnalignedConcatMHA
@@ -33,7 +33,6 @@ import standard_grid
 
 def multiclass_acc(preds, truths):
     return np.sum(np.round(preds) == np.round(truths)) / float(len(truths))
-
 
 def weighted_acc(preds, truths):
     preds, truths = preds > 0, truths > 0
@@ -123,7 +122,6 @@ def logSummary():
 def summary_to_dict():
     results = {}
 
-
     if gc.dataset == "iemocap_unaligned" or gc.dataset == "iemocap":
         for split in ["valid"]:
             for em in gc.best.iemocap_emos:
@@ -158,41 +156,42 @@ def summary_to_dict():
     return results
 
 
+import random
+def set_seed(my_seed):
+    os.environ['PYTHONHASHSEED'] = str(my_seed)
+    random.seed(my_seed)
+    np.random.seed(my_seed)
+    torch.manual_seed(my_seed)
+    torch.cuda.manual_seed(my_seed)
+    torch.cuda.manual_seed_all(my_seed)
+
+set_seed(0)
+class PositionalEncoding(nn.Module):
+    def __init__(self, d_model, dropout=0.1, max_len=5000):
+        super(PositionalEncoding, self).__init__()
+        self.dropout = nn.Dropout(p=dropout)
+
+        pe = torch.zeros(max_len, d_model)
+        position = torch.arange(0, max_len, dtype=torch.float).unsqueeze(1)
+        div_term = torch.exp(torch.arange(0, d_model, 2).float() * (-math.log(10000.0) / d_model))
+        pe[:, 0::2] = torch.sin(position * div_term)
+        pe[:, 1::2] = torch.cos(position * div_term[:d_model // 2])  # Added to support odd d_model
+        pe = pe.unsqueeze(0).transpose(0, 1).squeeze()
+        self.register_buffer('pe', pe)
+
+    def forward(self, x, counts):
+        pe_rel = torch.cat([self.pe[:count,:] for count in counts])
+        x = x + pe_rel.to(device)
+        return self.dropout(x)
+
 from torch_geometric.data import HeteroData
 from torch_geometric.data import Data
 from torch_geometric.loader import DataLoader
 import torch_geometric.transforms as T
 
-def get_fc_combinations(idxs_a, idxs_b): # get array of shape (2, len(idxs_a)*len(idxs_b)) for use in edge_index
-    if len(idxs_a) == 0 or len(idxs_b) == 0:
-        return torch.zeros((2,0))
-    
-    return torch.from_numpy(np.array(np.meshgrid(idxs_a, idxs_b)).reshape((-1, len(idxs_a)*len(idxs_b)))).to(torch.long)
-
-@memoized
-def get_idxs(a, b, conn_type):
-    '''
-    a is the length of the indices array for src, b is same for tar
-    get all indeces between a (src) and b (tar) according to conn_type.  if present, only choose indices that match.  if past, all a indices must be > b indices
-    '''
-    a = np.arange(a)
-    b = np.arange(b)
-    
-    tot = np.array(list(product(a,b)))
-    a_idxs, b_idxs = tot[:,0], tot[:,1]
-
-    if conn_type=='past':
-        return tot[a_idxs>b_idxs].T
-    elif conn_type=='pres':
-        return tot[a_idxs==b_idxs].T
-    elif conn_type=='fut':
-        return tot[a_idxs<b_idxs].T
-    else: 
-        assert False
-
-
 # get all connection types for declaring heteroconv later
 mods = ['text', 'audio', 'video']
+device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 conn_types = ['past', 'pres', 'fut']
 all_connections = []
 for mod in mods:
@@ -201,6 +200,13 @@ for mod in mods:
             all_connections.append((mod, conn_type, mod2))
 
 
+from graph_builder import construct_time_aware_dynamic_graph, build_time_aware_dynamic_graph_uni_modal, build_time_aware_dynamic_graph_cross_modal
+def get_masked(arr):
+    if (arr==0).all():
+        return torch.tensor([]).long()
+    else:
+        return arr[torch.argmax(~((arr==0).all(dim=-1)).to(torch.long)):]
+
 def get_loader(ds):
     words = ds[:][0]
     covarep = ds[:][1]
@@ -208,70 +214,282 @@ def get_loader(ds):
 
     total_data = []
     for i in range(words.shape[0]):
-        # get masks, use those to only add edges from non-padded portions
-        mask_words = (np.prod((words[i]==0).numpy(), axis=-1) + 1) % 2
-        mask_covarep = (np.prod((covarep[i]==0).numpy(), axis=-1) + 1) % 2
-        mask_facet = (np.prod((facet[i]==0).numpy(), axis=-1) + 1) % 2
-        mask = np.logical_or(np.logical_or(mask_words, mask_covarep), mask_facet).astype('int')
+        data = {
+            'text': get_masked(words[i]),
+            'audio': get_masked(covarep[i]),
+            'video': get_masked(facet[i]),
+        }
+        
+        if sum([len(v) for v in data.values()]) == 0:
+            continue
+        
+        hetero_data = { k: {'x': v} for k,v in data.items()}
+        
+        data = {
+            **data,
+            'text_idx': torch.arange(data['text'].shape[0]),
+            'audio_idx': torch.arange(data['audio'].shape[0]),
+            'video_idx': torch.arange(data['video'].shape[0]),
+        }
+        
+        for mod in mods:
+            ret = build_time_aware_dynamic_graph_uni_modal(data[f'{mod}_idx'],[], [], 0, all_to_all=gc.config['use_all_to_all'], time_aware=True, type_aware=True)
+            
+            if len(ret) == 0: # no data for this modality
+                continue
+            elif len(ret) == 1:
+                data[mod, 'pres', mod] = ret[0]
+            else:
+                data[mod, 'pres', mod], data[mod, 'fut', mod], data[mod, 'past', mod] = ret
+            
+            for mod2 in [modx for modx in mods if modx != mod]: # other modalities
+                ret = build_time_aware_dynamic_graph_cross_modal(data[f'{mod}_idx'],data[f'{mod2}_idx'], [], [], 0, time_aware=True, type_aware=True)
+                
+                if len(ret) == 0:
+                    continue
+                if len(ret) == 2: # one modality only has one element
+                    if len(data[f'{mod}_idx']) > len(data[f'{mod2}_idx']):
+                        data[mod2, 'pres', mod], data[mod, 'pres', mod2] = ret
+                    else:
+                        data[mod, 'pres', mod2], data[mod2, 'pres', mod] = ret
+                
+                else:
+                    if len(data[f'{mod}_idx']) > len(data[f'{mod2}_idx']): # the output we care about is the "longer" sequence
+                        ret = ret[3:]
+                    else:
+                        ret = ret[:3]
 
-        start_idx = np.where(mask)[0].min()
-        end_idx = mask.shape[0]
-
-        idxs = np.arange(start_idx, end_idx)
-        zero_idxs = idxs - idxs.min()
-        edge_idxs = get_fc_combinations(zero_idxs, zero_idxs)
-        assert edge_idxs.max() == words[i][idxs].shape[0] - 1 # edge case where there was a zero vector in the middle of the sequence that was 0 across all modalities
+                    data[mod, 'pres', mod2], data[mod, 'fut', mod2], data[mod, 'past', mod2] = ret
+                 
+        # quick assertions
+        for mod in mods:
+            assert isinstance(data[mod], torch.Tensor)
+            for mod2 in [modx for modx in mods if modx != mod]:
+                if (mod, 'fut', mod2) in data:
+                    assert (data[mod, 'fut', mod2].flip(dims=[0]) == data[mod2, 'past', mod]).all()
+                    assert isinstance(data[mod, 'fut', mod2], torch.Tensor) and isinstance(data[mod, 'past', mod2], torch.Tensor) and isinstance(data[mod, 'pres', mod2], torch.Tensor)
 
         hetero_data = {
-            'text': {'x': words[i][idxs]},
-            'audio': {'x': covarep[i][idxs]},
-            'video': {'x': facet[i][idxs]},
+            **hetero_data,
+            **{k: {'edge_index': v} for k,v in data.items() if isinstance(k, tuple) }
         }
-
-        # hetero_data2 = {
-        #     'words': {'x': words[i][idxs]},
-        #     'covarep': {'x': covarep[i][idxs]},
-        #     'facet': {'x': facet[i][idxs]},
-            
-        #     ('words', 'words_words', 'words'): {'edge_index': torch.clone(edge_idxs)},
-        #     ('facet', 'facet_facet', 'facet'): {'edge_index': torch.clone(edge_idxs)},
-        #     ('covarep', 'covarep_covarep', 'covarep'): {'edge_index': torch.clone(edge_idxs)},
-            
-        #     ('words', 'words_covarep', 'covarep'): {'edge_index': torch.clone(edge_idxs)},
-        #     ('words', 'words_facet', 'facet'): {'edge_index': torch.clone(edge_idxs)},
-        #     ('facet', 'facet_covarep', 'covarep'): {'edge_index': torch.clone(edge_idxs)},
-        #     ('facet', 'facet_words', 'words'): {'edge_index': torch.clone(edge_idxs)},
-        #     ('covarep', 'covarep_words', 'words'): {'edge_index': torch.clone(edge_idxs)},
-        #     ('covarep', 'covarep_facet', 'facet'): {'edge_index': torch.clone(edge_idxs)}
-        # }
-
-        # build hetero data dict
-        for mod in mods:
-            for conn_type in conn_types:
-                num_idxs = 0
-                for mod2 in mods:
-                    mod_idxs = len(hetero_data[mod]['x'])
-                    mod2_idxs = len(hetero_data[mod2]['x'])
-                    assert (mod, conn_type, mod2) not in hetero_data
-                    hetero_data[(mod, conn_type, mod2)] = {'edge_index': torch.Tensor(get_idxs(mod_idxs, mod2_idxs, conn_type)).to(torch.long)}
-                    
-
         hetero_data = HeteroData(hetero_data)
         
-        # hetero_data = hetero_data2
-        # hetero_data2 = HeteroData(hetero_data2)
-
         hetero_data = T.AddSelfLoops()(hetero_data) # todo: include this as a HP to see if it does anything!
         hetero_data.y = ds[i][-1]
         total_data.append(hetero_data)
 
-    loader = DataLoader(total_data, batch_size=gc.config['batch_size'])
+    loader = DataLoader(total_data, batch_size=gc.config['batch_size'], shuffle=True)
     # loader = DataLoader(total_data, batch_size=2)
     # batch = next(iter(loader))
     return loader
 
 from torch_geometric.nn import Linear
+    
+from torch_geometric.nn import HeteroConv, GCNConv, SAGEConv, GATConv, GATv2Conv, Linear
+from torch_scatter import scatter_mean
+import torch.nn.functional as F
+from gatv3conv import GATv3Conv
 
+class HeteroGNN(torch.nn.Module):
+    def __init__(self, hidden_channels, out_channels, num_layers):
+        super().__init__()
+        
+        self.hidden_channels = hidden_channels
+        self.heads = 4
+        
+        self.lin_dict = torch.nn.ModuleDict()
+        for node_type in mods:
+            self.lin_dict[node_type] = Linear(-1, hidden_channels)
+
+        self.convs = torch.nn.ModuleList()
+        for i in range(num_layers):
+            # for mod in mods:
+            #     self.lin_layers[f'{i}_{mod}'] = Linear(64, (hidden_channels//self.heads)*self.heads, bias=True, weight_initializer='glorot')
+            
+            # conv = HeteroConv({
+            #     conn_type: GATv2Conv(64, hidden_channels//self.heads, heads=self.heads)
+            #     for conn_type in all_connections
+            # }, aggr='mean')
+            
+
+            # UNCOMMENT FOR PARAMETER SHARING
+            mods_seen = {} # mapping from mod to the gatv3conv linear layer for it
+            d = {}
+            for conn_type in all_connections:
+                mod_l, _, mod_r = conn_type
+
+                lin_l = None if mod_l not in mods_seen else mods_seen[mod_l]
+                lin_r = None if mod_r not in mods_seen else mods_seen[mod_r]
+
+                _conv =  GATv3Conv(
+                    lin_l,
+                    lin_r,
+                    64, 
+                    hidden_channels//self.heads,
+                    heads=self.heads
+                )
+                if mod_l not in mods_seen:
+                    mods_seen[mod_l] = _conv.lin_l
+                if mod_r not in mods_seen:
+                    mods_seen[mod_r] = _conv.lin_r
+                d[conn_type] = _conv
+            
+            conv = HeteroConv(d, aggr='mean')
+
+            self.convs.append(conv)
+
+        self.finalW = nn.Sequential(
+            Linear(-1, hidden_channels // 4),
+            nn.ReLU(),
+            # nn.Linear(hidden_channels // 4, label_dim),
+            Linear(hidden_channels // 4, hidden_channels // 4),
+            nn.ReLU(),
+            Linear(hidden_channels // 4, out_channels),
+        )
+        self.pes = {k: PositionalEncoding(64) for k in mods}
+
+    def forward(self, x_dict, edge_index_dict, batch_dict):
+        x_dict = {key: self.lin_dict[key](x) for key, x in x_dict.items()}
+
+        # apply pe
+        for m, v in x_dict.items(): # modality, tensor
+            idxs = batch_dict[m]
+            assert (idxs==(idxs.sort().values)).all()
+            _, counts = torch.unique(idxs, return_counts=True)
+            x_dict[m] = self.pes[m](v, counts)
+
+        for conv in self.convs:
+            # x_dict = conv(x_dict, edge_index_dict)
+            x_dict, edge_types = conv(x_dict, edge_index_dict, return_attention_weights_dict={elt: True for elt in all_connections})
+
+            '''
+            x_dict: {
+                modality: (
+                    a -> tensor of shape batch_num_nodes (number of distinct modality nodes concatenated from across whole batch),
+                    b -> [
+                    (
+                        edge_idxs; shape (2, num_edges) where num_edges changes depending on edge_type (and pruning),
+                        attention weights; shape (num_edges, num_heads)
+                    )
+                    ] of length 9 b/c one for each edge type where text modality is dst, in same order as edge_types[modality] list
+                )
+            }
+            '''
+
+            # attn_dict = {
+            #     k: {
+            #         edge_type: {
+            #             'edge_idxs': edge_idxs,
+            #             'attn_weights': attn_weights,
+            #         }
+            #         for edge_type, (edge_idxs, attn_weights) in zip(edge_types[k], v[1])
+            #     } 
+            #     for k, v in x_dict.items()
+            # }
+            
+            x_dict = {key: x[0].relu() for key, x in x_dict.items()}
+
+        # readout: avg nodes (no pruning yet!)
+        x = torch.cat([v for v in x_dict.values()], axis=0)
+        batch_dicts = torch.cat([v for v in batch_dict.values()], axis=0)
+        x = scatter_mean(x,batch_dicts, dim=0)
+        return self.finalW(x).squeeze(axis=-1)
+
+def count_params(model): 
+    return sum(p.numel() for p in model.parameters() if p.requires_grad)
+
+debug = []
+
+def train(train_loader, model, optimizer):
+    total_loss, total_examples = 0,0
+    global debug
+    accs = []
+    maes = []
+    epoch_debug = []
+    model.train()
+    trn = enumerate(train_loader)
+    for batch_i, data in tqdm(trn): # need index to prune edges
+        if data.num_edges > 1e6:
+            print('Data too big to fit in batch')
+            continue
+
+        cont = False
+        for mod in mods:
+            if not np.any([mod in elt for elt in data.edge_index_dict.keys()]):
+                print(mod, 'dropped from train loader!')
+                cont = True
+        if cont:
+            continue
+        
+        data = data.to(device)
+        if batch_i == 0:
+            with torch.no_grad():  # Initialize lazy modules.
+                out = model(data.x_dict, data.edge_index_dict, data.batch_dict)
+
+        optimizer.zero_grad()
+
+        out = model(data.x_dict, data.edge_index_dict, data.batch_dict)
+        loss = F.mse_loss(out, data.y)
+        
+        # norm
+        loss = loss / torch.abs(loss.detach())
+
+        loss.backward()
+        optimizer.step()
+        total_loss += loss.detach().item()
+        total_examples += data.num_graphs
+
+        y_true = (data.y >= 0).detach().cpu().numpy()
+        y_pred = (out >= 0).detach().cpu().numpy()
+        accs.append(accuracy_score(y_true, y_pred))
+
+        maes.append(torch.nn.L1Loss()((out >= 0).to(torch.float).detach().cpu(),(data.y >= 0).to(torch.float).detach().cpu()))
+
+        del loss
+        del out
+        epoch_debug.append([data.num_nodes, data.num_edges, torch.cuda.memory_allocated(0)])
+        del data
+
+    debug.append(epoch_debug)
+    torch.cuda.empty_cache()
+    return total_loss / total_examples, float(np.mean(accs)), float(np.mean(maes))
+
+@torch.no_grad()
+def test(loader, model, scheduler, valid):
+    mse = []
+    maes = []
+    accs = []
+    model.eval()
+
+    mse = 0.0
+    for batch_i, data in enumerate(loader):
+        cont = False
+        for mod in mods:
+            if not np.any([mod in elt for elt in data.edge_index_dict.keys()]):
+                print(mod, 'dropped from test loader!')
+                cont = True
+        if cont:
+            continue
+
+        data = data.to(device)
+        out = model(data.x_dict, data.edge_index_dict, data.batch_dict)
+        mse += F.mse_loss(out, data.y, reduction='mean').item()
+        
+        y_true = (data.y >= 0).detach().cpu().numpy()
+        y_pred = (out >= 0).detach().cpu().numpy()
+        accs.append(accuracy_score(y_true, y_pred))
+        maes.append(torch.nn.L1Loss()((out >= 0).to(torch.float).detach().cpu(),(data.y >= 0).to(torch.float).detach().cpu()))
+
+        del data
+        del out
+    
+    # if valid:
+    #     scheduler.step(mse)
+    return mse, float(np.mean(accs)), float(np.mean(maes))
+    
+    
+import gc as g
 def train_model(optimizer, use_gnn=True, exclude_vision=False, exclude_audio=False, exclude_text=False, average_mha=False, num_gat_layers=1, lr_scheduler=None, reduce_on_plateau_lr_scheduler_patience=None, reduce_on_plateau_lr_scheduler_threshold=None, multi_step_lr_scheduler_milestones=None, exponential_lr_scheduler_gamma=None, use_pe=False, use_prune=False):
     assert lr_scheduler in ['reduce_on_plateau', 'exponential', 'multi_step',
                             None], 'LR scheduler can only be [reduce_on_plateau, exponential, multi_step]!'
@@ -303,159 +521,37 @@ def train_model(optimizer, use_gnn=True, exclude_vision=False, exclude_audio=Fal
     train_loader, train_labels = get_loader(train_dataset), train_dataset[:][-1]
     valid_loader, valid_labels = get_loader(valid_dataset), valid_dataset[:][-1]
     test_loader, test_labels = get_loader(test_dataset), test_dataset[:][-1]
-    
-    from torch_geometric.nn import HeteroConv, GCNConv, SAGEConv, GATConv, GATv2Conv, Linear
-    from torch_scatter import scatter_mean
-    import torch.nn.functional as F
 
-    class HeteroGNN(torch.nn.Module):
-        def __init__(self, hidden_channels, out_channels, num_layers):
-            super().__init__()
-            
-            self.hidden_channels = hidden_channels
-            self.heads = 4
-            
-            self.lin_dict = torch.nn.ModuleDict()
-            for node_type in mods:
-                self.lin_dict[node_type] = Linear(-1, hidden_channels)
-
-            self.convs = torch.nn.ModuleList()
-            for _ in range(num_layers):
-                conv = HeteroConv({
-                    conn_type: GATv2Conv(-1, hidden_channels//self.heads, heads=self.heads)
-                    for conn_type in all_connections
-                }, aggr='sum')
-                self.convs.append(conv)
-
-            self.finalW = nn.Sequential(
-                Linear(-1, hidden_channels // 4),
-                nn.ReLU(),
-                # nn.Linear(hidden_channels // 4, label_dim),
-                Linear(hidden_channels // 4, hidden_channels // 4),
-                nn.ReLU(),
-                Linear(hidden_channels // 4, out_channels),
-            )
-
-        def forward(self, x_dict, edge_index_dict, batch_dict):
-            x_dict = {key: self.lin_dict[key](x) for key, x in x_dict.items()}
-
-            for conv in self.convs:
-                # x_dict = conv(x_dict, edge_index_dict)
-                x_dict, edge_types = conv(x_dict, edge_index_dict, return_attention_weights_dict={elt: True for elt in all_connections})
-
-                '''
-                x_dict: {
-                  modality: (
-                      a -> tensor of shape batch_num_nodes (number of distinct modality nodes concatenated from across whole batch),
-                      b -> [
-                        (
-                            edge_idxs; shape (2, num_edges) where num_edges changes depending on edge_type (and pruning),
-                            attention weights; shape (num_edges, num_heads)
-                        )
-                      ] of length 9 b/c one for each edge type where text modality is dst, in same order as edge_types[modality] list
-                  )
-                }
-                '''
-
-
-                # attn_dict = {
-                #     k: {
-                #         edge_type: {
-                #             'edge_idxs': edge_idxs,
-                #             'attn_weights': attn_weights,
-                #         }
-                #         for edge_type, (edge_idxs, attn_weights) in zip(edge_types[k], v[1])
-                #     } 
-                #     for k, v in x_dict.items()
-                # }
-                
-                
-                x_dict = {key: x[0].relu() for key, x in x_dict.items()}
-
-            # readout: avg nodes (no pruning yet!)
-            x = torch.cat([v for v in x_dict.values()], axis=0)
-            batch_dicts = torch.cat([v for v in batch_dict.values()], axis=0)
-            x = scatter_mean(x,batch_dicts, dim=0)
-
-            return self.finalW(x).squeeze(axis=-1)
-
-    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    # device = 'cpu'
-    
     model = HeteroGNN(hidden_channels=64, out_channels=1, num_layers=6)
     model = model.to(device)
     
     optimizer = torch.optim.AdamW(
         model.parameters(), 
         lr=gc.config['global_lr'],
-        weight_decay=gc.config['weight_decay']
+        weight_decay=gc.config['weight_decay'],
+        betas=(gc.config['beta1'], gc.config['beta2']),
+        eps=gc.config['eps']
     )
-    actual_lr_scheduler = ReduceLROnPlateau(optimizer, factor=0.5, patience=10, threshold=.002)
-
-    def train(train_loader):
-        total_loss, total_examples = 0,0
-        accs = []
-
-        for batch_i, data in enumerate(train_loader): # need index to prune edges
-            data = data.to(device)
-
-            if batch_i == 0:
-                with torch.no_grad():  # Initialize lazy modules.
-                    out = model(data.x_dict, data.edge_index_dict, data.batch_dict)
-
-            model.train()
-            optimizer.zero_grad()
-            out = model(data.x_dict, data.edge_index_dict, data.batch_dict)
-
-            loss = F.mse_loss(out, data.y)
-            
-            # norm
-            loss = loss / torch.abs(loss.detach())
-
-            loss.backward()
-            optimizer.step()
-            total_loss += float(loss)
-            total_examples += data.num_graphs
-
-            y_true = (data.y >= 0).detach().cpu().numpy()
-            y_pred = (out >= 0).detach().cpu().numpy()
-            accs.append(accuracy_score(y_true, y_pred))
-
-            # pruning
-            # with torch.no_grad():
-                # if batch_i == 0:
-                    # for j in gc.config['batch_size']:
-                    # train_loader.dataset[0]['video', 'fut', 'video']['edge_index'] = torch.Tensor(2,0).to(torch.long)
-                    # gc.config['batch_size']
-
-        return total_loss / total_examples, float(np.mean(accs))
+    scheduler = ReduceLROnPlateau(optimizer, factor=0.5, patience=10, threshold=.002)
 
     from sklearn.metrics import accuracy_score
 
-    @torch.no_grad()
-    def test(loader):
-        mse = []
-        accs = []
-        model.eval()
+    best_mae = 1
+    best_test_acc = 0
+    best_valid_acc = 0
+    for epoch in range(1, gc.config['epoch_num']):
+        loss, train_acc, mae = train(train_loader, model, optimizer)
+        valid_loss, valid_acc, valid_mae = test(valid_loader, model, scheduler, valid=True)
+        test_loss, test_acc, test_mae = test(test_loader, model, scheduler, valid=False)
+        if mae < best_mae:
+            best_mae = mae
+            best_test_acc = test_acc
+            best_valid_acc = valid_acc
 
-        for data in loader:
-            data = data.to(device)
-            out = model(data.x_dict, data.edge_index_dict, data.batch_dict)
-            mse.append(F.mse_loss(out, data.y, reduction='none').cpu())
-            
-            y_true = (data.y >= 0).detach().cpu().numpy()
-            y_pred = (out >= 0).detach().cpu().numpy()
-            accs.append(accuracy_score(y_true, y_pred))
+        print('Model parameters:', count_params(model))
+        print(f'Epoch: {epoch:03d}, Loss: {loss:.4f}, Train: {train_acc:.4f}, ' f'Valid: {valid_acc:.4f}, Test: {test_acc:.4f}')
 
-        return float(torch.cat(mse, dim=0).mean().sqrt()), float(np.mean(accs))
-        
-    for epoch in range(1, 101):
-        loss, train_acc = train(train_loader)
-        valid_loss, valid_acc = test(valid_loader)
-        test_loss, test_acc = test(test_loader)
-        print(f'Epoch: {epoch:03d}, Loss: {loss:.4f}, Train: {train_acc:.4f}, '
-            f'Valid: {valid_acc:.4f}, Test: {test_acc:.4f}')
-
+    print(f'\nBest test acc: {best_test_acc:.4f},\nBest valid acc: {best_valid_acc:.4f}')
 
 
 
