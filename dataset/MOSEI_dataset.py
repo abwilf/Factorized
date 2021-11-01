@@ -40,14 +40,14 @@ class MoseiDataset(Data.Dataset):
 
 
     def load_data(self):
-        if gc.data_path[-1] != '/':
-            gc.data_path = gc.data_path + '/'
-        dataset = pickle.load(open(gc.data_path + 'tensors.pkl', 'rb'))
+        if gc['data_path'][-1] != '/':
+            gc['data_path'] = gc['data_path'] + '/'
+        dataset = pickle.load(open(gc['data_path'] + 'tensors.pkl', 'rb'))
         split = {'train':0, 'valid':1, 'test':2}
-        gc.padding_len = dataset[0][split['test']]['glove_vectors'].shape[1]
-        gc.config['text_dim'] = dataset[0][split['test']]['glove_vectors'].shape[2]
-        gc.config['audio_dim'] = dataset[0][split['test']]['COAVAREP'].shape[2]
-        gc.config['vision_dim'] = dataset[0][split['test']]['FACET 4.2'].shape[2]
+        gc['padding_len'] = dataset[0][split['test']]['glove_vectors'].shape[1]
+        gc['text_dim'] = dataset[0][split['test']]['glove_vectors'].shape[2]
+        gc['audio_dim'] = dataset[0][split['test']]['COAVAREP'].shape[2]
+        gc['vision_dim'] = dataset[0][split['test']]['FACET 4.2'].shape[2]
 
         for ds, split_type in [(MoseiDataset.trainset, 'train'), (MoseiDataset.validset, 'valid'),
                                (MoseiDataset.testset, 'test')]:
@@ -68,4 +68,4 @@ class MoseiDataset(Data.Dataset):
 
 
 if __name__ == "__main__":
-    dataset = MoseiDataset(gc.data_path)
+    dataset = MoseiDataset(gc['data_path'])

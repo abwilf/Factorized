@@ -2,3 +2,11 @@
 
 *.swp
 *.swo
+data
+hetero_data
+dataset
+standard_grid
+graph_model
+deployed
+*.pk
+*.pyc
