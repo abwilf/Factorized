@@ -46,7 +46,6 @@ import torch_geometric.transforms as T
 
 from graph_builder import construct_time_aware_dynamic_graph, build_time_aware_dynamic_graph_uni_modal, build_time_aware_dynamic_graph_cross_modal
 
-
 def set_seed(my_seed):
     os.environ['PYTHONHASHSEED'] = str(my_seed)
     random.seed(my_seed)
@@ -67,6 +66,8 @@ dataset_map = {
     'iemocap': IemocapDataset
 }
 
+ie_emos = ["Neutral", "Happy", "Sad", "Angry"]
+
 # get all connection types for declaring heteroconv later
 mods = ['text', 'audio', 'video']
 conn_types = ['past', 'pres', 'fut']
@@ -76,6 +77,16 @@ for mod in mods:
         for conn_type in conn_types:
             all_connections.append((mod, conn_type, mod2))
 
+
+def topk_edge_pooling(percentage, edge_index, edge_weights):
+    if percentage < 1.0:
+        p_edge_weights = torch.mean(edge_weights, 1).squeeze()
+        sorted_inds = torch.argsort(p_edge_weights, descending=True)
+        kept_index = sorted_inds[:int(len(sorted_inds) * percentage)]
+        # kept = p_edge_weights >= self.min_score
+        return edge_index[:, kept_index], edge_weights[kept_index], kept_index
+    else:
+        return edge_index, edge_weights, torch.arange(edge_index.shape[1]).to(edge_index.device)
 
 def multiclass_acc(preds, truths):
     return np.sum(np.round(preds) == np.round(truths)) / float(len(truths))
@@ -93,21 +104,20 @@ def eval_iemocap(split, output_all, label_all, epoch=None):
     test_truth = truths.reshape((-1, 4))
     emos_f1 = {}
     emos_acc = {}
-    for emo_ind, em in enumerate(gc.best.iemocap_emos):
+    for emo_ind, em in enumerate(ie_emos):
         test_preds_i = np.argmax(test_preds[:, emo_ind], axis=1)
         test_truth_i = test_truth[:, emo_ind]
         f1 = f1_score(test_truth_i, test_preds_i, average='weighted')
         emos_f1[em] = f1
         acc = accuracy_score(test_truth_i, test_preds_i)
         emos_acc[em] = acc
-        logging.info("\t%s %s F1 Score: %f" % (split, gc.best.iemocap_emos[emo_ind], f1))
-        logging.info("\t%s %s Accuracy: %f" % (split, gc.best.iemocap_emos[emo_ind], acc))
-    return emos_f1, emos_acc
-
+    
+    return {
+        'f1': emos_f1,
+        'acc': emos_acc
+    }
 
 def eval_mosi_mosei(split, output_all, label_all):
-    # The length of output_all / label_all is the number
-    # of samples within that split
     truth = np.array(label_all)
     preds = np.array(output_all)
     mae = np.mean(np.abs(truth - preds))
@@ -125,15 +135,15 @@ def eval_mosi_mosei(split, output_all, label_all):
     f1_raven = f1_score(truth >= 0, preds >= 0, average="weighted")  # Non-negative VS. Negative
     f1_mult = f1_score((truth[non_zeros] > 0), (preds[non_zeros] > 0), average='weighted')  # Positive VS. Negative
 
-    logging.info("\t%s mean error: %f" % (split, mae))
-    logging.info("\t%s correlation: %f" % (split, cor))
-    logging.info("\t%s accuracy: %f" % (split, acc))
-    logging.info("\t%s accuracy 7: %f" % (split, acc_7))
-    logging.info("\t%s exclude zero accuracy: %f" % (split, ex_zero_acc))
-    # left and right refers to left side / right side value in Table 1 of https://arxiv.org/pdf/1911.09826.pdf
-    logging.info("\t%s F1 score (raven): %f " % (split, f1_raven))  # includes zeros, Non-negative VS. Negative
-    logging.info("\t%s F1 score (mult): %f " % (split, f1_mult))  # exclude zeros, Positive VS. Negative
-    return mae, cor, acc, ex_zero_acc, acc_7, f1_mfn, f1_raven, f1_mult
+    return {
+        'mae': mae,
+        'corr': cor,
+        'acc_2': acc,
+        'acc_7': acc_7,
+        'ex_zero_acc': ex_zero_acc,
+        'f1_raven': f1_raven, # includes zeros, Non-negative VS. Negative
+        'f1_mult': f1_mult,  # exclude zeros, Positive VS. Negative
+    }
 
 class PositionalEncoding(nn.Module):
     def __init__(self, d_model, dropout=0.1, max_len=5000):
@@ -193,7 +203,7 @@ def get_loader(ds):
                 data[mod, 'pres', mod] = ret[0]
             else:
                 data[mod, 'pres', mod], data[mod, 'fut', mod], data[mod, 'past', mod] = ret
-            
+
             for mod2 in [modx for modx in mods if modx != mod]: # other modalities
                 ret = build_time_aware_dynamic_graph_cross_modal(data[f'{mod}_idx'],data[f'{mod2}_idx'], [], [], 0, time_aware=True, type_aware=True)
                 
@@ -227,13 +237,13 @@ def get_loader(ds):
         }
         hetero_data = HeteroData(hetero_data)
         
-        hetero_data = T.AddSelfLoops()(hetero_data) # todo: include this as a HP to see if it does anything!
+        # hetero_data = T.AddSelfLoops()(hetero_data) # todo: include this as a HP to see if it does anything!
         hetero_data.y = ds[i][-1]
         total_data.append(hetero_data)
 
     loader = DataLoader(total_data, batch_size=gc['batch_size'], shuffle=True)
+    # loader = DataLoader(total_data, batch_size=gc['batch_size'], shuffle=False)
     # loader = DataLoader(total_data, batch_size=2)
-    # batch = next(iter(loader))
     return loader
 
 
@@ -249,6 +259,7 @@ class HeteroGNN(torch.nn.Module):
             self.lin_dict[node_type] = Linear(-1, hidden_channels)
 
         self.convs = torch.nn.ModuleList()
+
         for i in range(num_layers):
             # for mod in mods:
             #     self.lin_layers[f'{i}_{mod}'] = Linear(64, (hidden_channels//self.heads)*self.heads, bias=True, weight_initializer='glorot')
@@ -293,6 +304,7 @@ class HeteroGNN(torch.nn.Module):
             nn.ReLU(),
             Linear(hidden_channels // 4, out_channels),
         )
+        
         self.pes = {k: PositionalEncoding(64) for k in mods}
 
     def forward(self, x_dict, edge_index_dict, batch_dict):
@@ -323,17 +335,17 @@ class HeteroGNN(torch.nn.Module):
             }
             '''
 
-            # attn_dict = {
-            #     k: {
-            #         edge_type: {
-            #             'edge_idxs': edge_idxs,
-            #             'attn_weights': attn_weights,
-            #         }
-            #         for edge_type, (edge_idxs, attn_weights) in zip(edge_types[k], v[1])
-            #     } 
-            #     for k, v in x_dict.items()
-            # }
-            
+            attn_dict = {
+                k: {
+                    edge_type: {
+                        'edge_index': edge_index,
+                        'edge_weight': edge_weight,
+                    }
+                    for edge_type, (edge_index, edge_weight) in zip(edge_types[k], v[1])
+                } 
+                for k, v in x_dict.items()
+            }
+
             x_dict = {key: x[0].relu() for key, x in x_dict.items()}
 
         # readout: avg nodes (no pruning yet!)
@@ -345,17 +357,19 @@ class HeteroGNN(torch.nn.Module):
 def count_params(model): 
     return sum(p.numel() for p in model.parameters() if p.requires_grad)
 
-
 def train(train_loader, model, optimizer):
     total_loss, total_examples = 0,0
-    accs = []
-    maes = []
+    y_trues = []
+    y_preds = []
     model.train()
     for batch_i, data in enumerate(tqdm(train_loader)): # need index to prune edges
+        if 'iemocap' in gc['dataset']:
+            data.y = data.y.reshape(-1,4)
+
         if data.num_edges > 1e6:
             print('Data too big to fit in batch')
             continue
-
+            
         cont = False
         for mod in mods:
             if not np.any([mod in elt for elt in data.edge_index_dict.keys()]):
@@ -372,37 +386,37 @@ def train(train_loader, model, optimizer):
         optimizer.zero_grad()
 
         out = model(data.x_dict, data.edge_index_dict, data.batch_dict)
-        loss = F.mse_loss(out, data.y)
-        
-        # norm
-        loss = loss / torch.abs(loss.detach())
+        if 'iemocap' in gc['dataset']:
+            loss = nn.CrossEntropyLoss()(out, data.y.argmax(-1))
+        else:
+            loss = F.mse_loss(out, data.y)
+            loss = loss / torch.abs(loss.detach()) # norm
 
         loss.backward()
         optimizer.step()
         total_loss += loss.detach().item()
         total_examples += data.num_graphs
 
-        y_true = (data.y >= 0).detach().cpu().numpy()
-        y_pred = (out >= 0).detach().cpu().numpy()
-        accs.append(accuracy_score(y_true, y_pred))
-
-        maes.append(torch.nn.L1Loss()((out >= 0).to(torch.float).detach().cpu(),(data.y >= 0).to(torch.float).detach().cpu()))
+        y_true = data.y.detach().cpu().numpy()
+        y_pred = out.detach().cpu().numpy()
+        
+        y_trues.extend(y_true)
+        y_preds.extend(y_pred)
 
         del loss
         del out
         del data
 
     torch.cuda.empty_cache()
-    return total_loss / total_examples, float(np.mean(accs)), float(np.mean(maes))
+    return total_loss / total_examples, y_trues, y_preds
 
 @torch.no_grad()
 def test(loader, model, scheduler, valid):
-    mse = []
-    maes = []
-    accs = []
+    y_trues = []
+    y_preds = []
     model.eval()
 
-    mse = 0.0
+    l = 0.0
     for batch_i, data in enumerate(loader):
         cont = False
         for mod in mods:
@@ -414,19 +428,25 @@ def test(loader, model, scheduler, valid):
 
         data = data.to(device)
         out = model(data.x_dict, data.edge_index_dict, data.batch_dict)
-        mse += F.mse_loss(out, data.y, reduction='mean').item()
+        if 'iemocap' in gc['dataset']:
+            loss = nn.CrossEntropyLoss()(out, data.y.argmax(-1))
+        else:
+            loss = F.mse_loss(out, data.y)
+            loss = loss / torch.abs(loss.detach()) # norm
+        l += F.mse_loss(out, data.y, reduction='mean').item()
+
+        y_true = data.y.detach().cpu().numpy()
+        y_pred = out.detach().cpu().numpy()
         
-        y_true = (data.y >= 0).detach().cpu().numpy()
-        y_pred = (out >= 0).detach().cpu().numpy()
-        accs.append(accuracy_score(y_true, y_pred))
-        maes.append(torch.nn.L1Loss()((out >= 0).to(torch.float).detach().cpu(),(data.y >= 0).to(torch.float).detach().cpu()))
+        y_trues.extend(y_true)
+        y_preds.extend(y_pred)
 
         del data
         del out
     
     # if valid:
     #     scheduler.step(mse)
-    return mse, float(np.mean(accs)), float(np.mean(maes))
+    return mse, y_trues, y_preds
     
 
 def train_model(optimizer, use_gnn=True, exclude_vision=False, exclude_audio=False, exclude_text=False, average_mha=False, num_gat_layers=1, lr_scheduler=None, reduce_on_plateau_lr_scheduler_patience=None, reduce_on_plateau_lr_scheduler_threshold=None, multi_step_lr_scheduler_milestones=None, exponential_lr_scheduler_gamma=None, use_pe=False, use_prune=False):
@@ -446,7 +466,8 @@ def train_model(optimizer, use_gnn=True, exclude_vision=False, exclude_audio=Fal
     valid_loader, valid_labels = get_loader(valid_dataset), valid_dataset[:][-1]
     test_loader, test_labels = get_loader(test_dataset), test_dataset[:][-1]
 
-    model = HeteroGNN(hidden_channels=64, out_channels=1, num_layers=6)
+    out_channels = 4 if 'iemocap' in gc['dataset'] else 1
+    model = HeteroGNN(hidden_channels=64, out_channels=out_channels, num_layers=6)
     model = model.to(device)
     
     optimizer = torch.optim.AdamW(
@@ -458,22 +479,38 @@ def train_model(optimizer, use_gnn=True, exclude_vision=False, exclude_audio=Fal
     )
     scheduler = ReduceLROnPlateau(optimizer, factor=0.5, patience=10, threshold=.002)
 
+    eval_fns = {
+        'mosi_unaligned': eval_mosi_mosei,
+        'mosei_unaligned': eval_mosi_mosei,
+        'iemocap_unaligned': eval_iemocap,
+    }
+    eval_fn = eval_fns[gc['dataset']]
+
     best_mae = 1
     best_test_acc = 0
     best_valid_acc = 0
-    for epoch in range(1, gc['epoch_num']):
-        loss, train_acc, mae = train(train_loader, model, optimizer)
-        valid_loss, valid_acc, valid_mae = test(valid_loader, model, scheduler, valid=True)
-        test_loss, test_acc, test_mae = test(test_loader, model, scheduler, valid=False)
-        if mae < best_mae:
+    for epoch in range(gc['epoch_num']):
+        loss, y_trues_train, y_preds_train = train(train_loader, model, optimizer)
+        train_res = eval_fn('train', y_preds_train, y_trues_train)
+        train_acc, train_mae = train_res['acc_2'], train_res['mae']
+
+        valid_loss, y_trues_valid, y_preds_valid = test(valid_loader, model, scheduler, valid=True)
+        valid_res = eval_fn('valid', y_preds_valid, y_trues_valid)
+        valid_acc, valid_mae = valid_res['acc_2'], valid_res['mae']
+
+        test_loss, y_trues_test, y_preds_test = test(test_loader, model, scheduler, valid=False)
+        test_res = eval_fn('test', y_preds_test, y_trues_test)
+        test_acc, test_mae = test_res['acc_2'], test_res['mae']
+
+        if valid_acc < best_valid_acc:
             best_mae = mae
             best_test_acc = test_acc
             best_valid_acc = valid_acc
 
-        print('Model parameters:', count_params(model))
         print(f'Epoch: {epoch:03d}, Loss: {loss:.4f}, Train: {train_acc:.4f}, ' f'Valid: {valid_acc:.4f}, Test: {test_acc:.4f}')
 
     print(f'\nBest test acc: {best_test_acc:.4f},\nBest valid acc: {best_valid_acc:.4f}')
+    print('Model parameters:', count_params(model))
 
 
 def get_arguments():
