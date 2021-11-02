@@ -42,14 +42,14 @@ class IemocapDataset(Data.Dataset):
 
 
     def load_data(self):
-        if gc.data_path[-1] != '/':
-            gc.data_path = gc.data_path + '/'
-        dataset = pickle.load(open(gc.data_path + 'iemocap_data.pkl', 'rb'))
+        if gc['data_path'][-1] != '/':
+            gc['data_path'] = gc['data_path'] + '/'
+        dataset = pickle.load(open(gc['data_path'] + 'iemocap_data.pkl', 'rb'))
 
-        gc.padding_len = dataset['test']['text'].shape[1]
-        gc.config['text_dim'] = dataset['test']['text'].shape[2]
-        gc.config['audio_dim'] = dataset['test']['audio'].shape[2]
-        gc.config['vision_dim'] = dataset['test']['vision'].shape[2]
+        gc['padding_len'] = dataset['test']['text'].shape[1]
+        gc['text_dim'] = dataset['test']['text'].shape[2]
+        gc['audio_dim'] = dataset['test']['audio'].shape[2]
+        gc['vision_dim'] = dataset['test']['vision'].shape[2]
 
         for ds, split_type in [(IemocapDataset.trainset, 'train'), (IemocapDataset.validset, 'valid'),
                                (IemocapDataset.testset, 'test')]:
@@ -95,14 +95,14 @@ class IemocapDatasetUnaligned(Data.Dataset):
 
 
     def load_data(self):
-        if gc.data_path[-1] != '/':
-            gc.data_path = gc.data_path + '/'
-        dataset = pickle.load(open(gc.data_path + 'iemocap_data_noalign.pkl', 'rb'))
+        if gc['data_path'][-1] != '/':
+            gc['data_path'] = gc['data_path'] + '/'
+        dataset = pickle.load(open(gc['data_path'] + 'iemocap_data_noalign.pkl', 'rb'))
 
-        gc.padding_len = dataset['test']['text'].shape[1]
-        gc.config['text_dim'] = dataset['test']['text'].shape[2]
-        gc.config['audio_dim'] = dataset['test']['audio'].shape[2]
-        gc.config['vision_dim'] = dataset['test']['vision'].shape[2]
+        gc['padding_len'] = dataset['test']['text'].shape[1]
+        gc['text_dim'] = dataset['test']['text'].shape[2]
+        gc['audio_dim'] = dataset['test']['audio'].shape[2]
+        gc['vision_dim'] = dataset['test']['vision'].shape[2]
 
         for ds, split_type in [(IemocapDatasetUnaligned.trainset, 'train'), (IemocapDatasetUnaligned.validset, 'valid'),
                                (IemocapDatasetUnaligned.testset, 'test')]:
@@ -122,4 +122,4 @@ class IemocapDatasetUnaligned(Data.Dataset):
         return len(self.y)
 
 if __name__ == "__main__":
-    dataset = IemocapDataset(gc.data_path)
+    dataset = IemocapDataset(gc['data_path'])

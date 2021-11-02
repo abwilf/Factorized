@@ -1,3 +1,6 @@
+from collections import OrderedDict
+from torch.autograd import Variable
+
 import traceback
 import torch
 import torch.nn as nn
@@ -41,10 +44,13 @@ import torch.nn.functional as F
 from gatv3conv import GATv3Conv
 from torch_geometric.data import HeteroData
 from torch_geometric.data import Data
-from torch_geometric.loader import DataLoader
+from HeteroDataLoader import DataLoader
 import torch_geometric.transforms as T
 
 from graph_builder import construct_time_aware_dynamic_graph, build_time_aware_dynamic_graph_uni_modal, build_time_aware_dynamic_graph_cross_modal
+
+import mylstm
+from social_iq import *
 
 def set_seed(my_seed):
     os.environ['PYTHONHASHSEED'] = str(my_seed)
@@ -63,7 +69,7 @@ dataset_map = {
     'mosei': MoseiDataset,
     'mosei_unaligned': MoseiDatasetUnaligned,
     'iemocap_unaligned': IemocapDatasetUnaligned,
-    'iemocap': IemocapDataset
+    'iemocap': IemocapDataset,
 }
 
 ie_emos = ["Neutral", "Happy", "Sad", "Angry"]
@@ -76,6 +82,36 @@ for mod in mods:
     for mod2 in mods:
         for conn_type in conn_types:
             all_connections.append((mod, conn_type, mod2))
+
+
+
+def get_fc_combinations(idxs_a, idxs_b): # get array of shape (2, len(idxs_a)*len(idxs_b)) for use in edge_index
+    if len(idxs_a) == 0 or len(idxs_b) == 0:
+        return torch.zeros((2,0))
+    
+    return torch.from_numpy(np.array(np.meshgrid(idxs_a, idxs_b)).reshape((-1, len(idxs_a)*len(idxs_b)))).to(torch.long)
+
+
+@memoized
+def get_idxs(a, b, conn_type):
+    '''
+    a is the length of the indices array for src, b is same for tar
+    get all indeces between a (src) and b (tar) according to conn_type.  if present, only choose indices that match.  if past, all a indices must be > b indices
+    '''
+    a = np.arange(a)
+    b = np.arange(b)
+    
+    tot = np.array(list(product(a,b)))
+    a_idxs, b_idxs = tot[:,0], tot[:,1]
+
+    if conn_type=='past':
+        return tot[a_idxs>b_idxs].T
+    elif conn_type=='pres':
+        return tot[a_idxs==b_idxs].T
+    elif conn_type=='fut':
+        return tot[a_idxs<b_idxs].T
+    else: 
+        assert False
 
 
 def topk_edge_pooling(percentage, edge_index, edge_weights):
@@ -174,6 +210,12 @@ def get_loader(ds):
     covarep = ds[:][1]
     facet = ds[:][2]
 
+    if 'social' in gc['dataset']:
+        q,a,inc=[torch.from_numpy(data[:]) for data in ds[0]]
+        facet=torch.from_numpy(ds[1][:,:,:].transpose(1,0,2))
+        words=torch.from_numpy(ds[2][:,:,:].transpose(1,0,2))
+        covarep=torch.from_numpy(ds[3][:,:,:].transpose(1,0,2))
+
     total_data = []
     for i in range(words.shape[0]):
         data = {
@@ -224,26 +266,36 @@ def get_loader(ds):
                     data[mod, 'pres', mod2], data[mod, 'fut', mod2], data[mod, 'past', mod2] = ret
                  
         # quick assertions
-        for mod in mods:
-            assert isinstance(data[mod], torch.Tensor)
-            for mod2 in [modx for modx in mods if modx != mod]:
-                if (mod, 'fut', mod2) in data:
-                    assert (data[mod, 'fut', mod2].flip(dims=[0]) == data[mod2, 'past', mod]).all()
-                    assert isinstance(data[mod, 'fut', mod2], torch.Tensor) and isinstance(data[mod, 'past', mod2], torch.Tensor) and isinstance(data[mod, 'pres', mod2], torch.Tensor)
+        # for mod in mods:
+        #     assert isinstance(data[mod], torch.Tensor)
+        #     for mod2 in [modx for modx in mods if modx != mod]:
+        #         if (mod, 'fut', mod2) in data:
+        #             assert (data[mod, 'fut', mod2].flip(dims=[0]) == data[mod2, 'past', mod]).all()
+        #             assert isinstance(data[mod, 'fut', mod2], torch.Tensor) and isinstance(data[mod, 'past', mod2], torch.Tensor) and isinstance(data[mod, 'pres', mod2], torch.Tensor)
 
         hetero_data = {
             **hetero_data,
             **{k: {'edge_index': v} for k,v in data.items() if isinstance(k, tuple) }
         }
+        if 'social' in gc['dataset']:
+            hetero_data = {
+                **hetero_data,
+                'q': q[i],
+                'a': a[i],
+                'inc': inc[i],
+                'vis': facet[i],
+                'trs': words[i],
+                'acc': covarep[i],
+            }
         hetero_data = HeteroData(hetero_data)
         
         # hetero_data = T.AddSelfLoops()(hetero_data) # todo: include this as a HP to see if it does anything!
-        hetero_data.y = ds[i][-1]
+        if 'social' not in gc['dataset']:
+            hetero_data.y = ds[i][-1]
+        
         total_data.append(hetero_data)
 
     loader = DataLoader(total_data, batch_size=gc['batch_size'], shuffle=True)
-    # loader = DataLoader(total_data, batch_size=gc['batch_size'], shuffle=False)
-    # loader = DataLoader(total_data, batch_size=2)
     return loader
 
 
@@ -261,9 +313,6 @@ class HeteroGNN(torch.nn.Module):
         self.convs = torch.nn.ModuleList()
 
         for i in range(num_layers):
-            # for mod in mods:
-            #     self.lin_layers[f'{i}_{mod}'] = Linear(64, (hidden_channels//self.heads)*self.heads, bias=True, weight_initializer='glorot')
-            
             # conv = HeteroConv({
             #     conn_type: GATv2Conv(64, hidden_channels//self.heads, heads=self.heads)
             #     for conn_type in all_connections
@@ -296,15 +345,6 @@ class HeteroGNN(torch.nn.Module):
 
             self.convs.append(conv)
 
-        self.finalW = nn.Sequential(
-            Linear(-1, hidden_channels // 4),
-            nn.ReLU(),
-            # nn.Linear(hidden_channels // 4, label_dim),
-            Linear(hidden_channels // 4, hidden_channels // 4),
-            nn.ReLU(),
-            Linear(hidden_channels // 4, out_channels),
-        )
-        
         self.pes = {k: PositionalEncoding(64) for k in mods}
 
     def forward(self, x_dict, edge_index_dict, batch_dict):
@@ -352,7 +392,8 @@ class HeteroGNN(torch.nn.Module):
         x = torch.cat([v for v in x_dict.values()], axis=0)
         batch_dicts = torch.cat([v for v in batch_dict.values()], axis=0)
         x = scatter_mean(x,batch_dicts, dim=0)
-        return self.finalW(x).squeeze(axis=-1)
+        return x
+
 
 def count_params(model): 
     return sum(p.numel() for p in model.parameters() if p.requires_grad)
@@ -381,11 +422,11 @@ def train(train_loader, model, optimizer):
         data = data.to(device)
         if batch_i == 0:
             with torch.no_grad():  # Initialize lazy modules.
-                out = model(data.x_dict, data.edge_index_dict, data.batch_dict)
+                out = model(data)
 
         optimizer.zero_grad()
 
-        out = model(data.x_dict, data.edge_index_dict, data.batch_dict)
+        out = model(data)
         if 'iemocap' in gc['dataset']:
             loss = nn.CrossEntropyLoss()(out, data.y.argmax(-1))
         else:
@@ -427,7 +468,7 @@ def test(loader, model, scheduler, valid):
             continue
 
         data = data.to(device)
-        out = model(data.x_dict, data.edge_index_dict, data.batch_dict)
+        out = model(data)
         if 'iemocap' in gc['dataset']:
             loss = nn.CrossEntropyLoss()(out, data.y.argmax(-1))
         else:
@@ -446,8 +487,184 @@ def test(loader, model, scheduler, valid):
     
     # if valid:
     #     scheduler.step(mse)
-    return mse, y_trues, y_preds
-    
+    return l, y_trues, y_preds
+
+def feed_forward(q,a,i,vis,trs,acc,q_lstm,a_lstm,v_lstm,t_lstm,ac_lstm,mfn_mem,mfn_delta1,mfn_delta2,mfn_tfn):
+    reference_shape=q.shape
+
+    q_rep=q_lstm.step(to_pytorch(flatten_qail(q)))[1][0][0,:,:]
+    a_rep=a_lstm.step(to_pytorch(flatten_qail(a)))[1][0][0,:,:]
+    i_rep=a_lstm.step(to_pytorch(flatten_qail(i)))[1][0][0,:,:]
+
+    #transcript representation
+    t_full=t_lstm.step(to_pytorch(trs))
+    #visual representation
+    v_full=v_lstm.step(to_pytorch(vis))
+    #acoustic representation
+    ac_full=ac_lstm.step(to_pytorch(acc))
+
+    t_seq=t_full[0]
+    v_seq=v_full[0]
+    ac_seq=ac_full[0]
+
+    t_rep_extended=reshape_to_correct(t_full[1][0][0,:,:],reference_shape)
+    v_rep_extended=reshape_to_correct(v_full[1][0][0,:,:],reference_shape)
+    ac_rep_extended=reshape_to_correct(ac_full[1][0][0,:,:],reference_shape)
+
+    #MFN and TFN Dance! 
+    before_tfn=torch.cat([mfn_delta2((mfn_delta1(torch.cat([t_seq[i],t_seq[i+1],v_seq[i],v_seq[i+1],ac_seq[i],ac_seq[i+1]],dim=1))*torch.cat([t_seq[i],t_seq[i+1],v_seq[i],v_seq[i+1],ac_seq[i],ac_seq[i+1]],dim=1)))[None,:,:] for i in range(t_seq.shape[0]-1)],dim=0)
+    after_tfn=torch.cat([mfn_tfn.fusion([before_tfn[i,:,:50],before_tfn[i,:,50:70],before_tfn[i,:,70:]])[None,:,:] for i in range(t_seq.shape[0]-1)],dim=0)
+    after_mfn=mfn_mem.step(after_tfn)[1][0][0,:,:]
+    mfn_final=reshape_to_correct(after_mfn,reference_shape)
+
+    return q_rep,a_rep,i_rep,t_rep_extended,v_rep_extended,ac_rep_extended,mfn_final
+
+paths={}
+paths["QA_BERT_lastlayer_binarychoice"]="../Social-IQ/socialiq/SOCIAL-IQ_QA_BERT_LASTLAYER_BINARY_CHOICE.csd"
+paths["DENSENET161_1FPS"]="./deployed/b'SOCIAL_IQ_DENSENET161_1FPS'.csd"
+paths["Transcript_Raw_Chunks_BERT"]="./deployed/b'SOCIAL_IQ_TRANSCRIPT_RAW_CHUNKS_BERT'.csd"
+paths["Acoustic"]="./deployed/b'SOCIAL_IQ_COVAREP'.csd"
+social_iq=mmdatasdk.mmdataset(paths)
+social_iq.unify() 
+
+class SocialModel(torch.nn.Module):
+    def __init__(self):
+        super().__init__()
+        
+        self.q_lstm=mylstm.MyLSTM(768,50)
+        self.a_lstm=mylstm.MyLSTM(768,50)
+        
+        self.judge = nn.Sequential(OrderedDict([
+            ('fc0',   nn.Linear(214,25)),
+            ('sig0', nn.Sigmoid()),
+            ('fc1',   nn.Linear(25,1)),
+            ('sig1', nn.Sigmoid())
+        ]))
+
+        self.hetero_gnn = HeteroGNN(64, 1, 6)
+
+    def forward(self, batch):
+        hetero_out = self.hetero_gnn(batch.x_dict, batch.edge_index_dict, batch.batch_dict)
+        hetero_reshaped = hetero_out[:,None,:].expand(-1, 12*6, -1).reshape(-1, 64)
+        hetero_normed = (hetero_reshaped - hetero_reshaped.mean(dim=-1)[:,None]) / (hetero_reshaped.std(dim=-1)[:,None] + 1e-6)
+
+        q = batch.q.reshape(-1, 6, *batch.q.shape[1:])
+        a = batch.a.reshape(-1, 6, *batch.a.shape[1:])
+        inc = batch.inc.reshape(-1, 6, *batch.inc.shape[1:])
+        
+        q_rep=self.q_lstm.step(to_pytorch(flatten_qail(q)))[1][0][0,:,:]
+        a_rep=self.a_lstm.step(to_pytorch(flatten_qail(a)))[1][0][0,:,:]
+        i_rep=self.a_lstm.step(to_pytorch(flatten_qail(inc)))[1][0][0,:,:]
+
+        correct=self.judge(torch.cat((q_rep,a_rep,i_rep,hetero_normed),1))
+        incorrect=self.judge(torch.cat((q_rep,i_rep,a_rep,hetero_normed),1))
+
+        return correct, incorrect
+
+class MosiModel(torch.nn.Module):
+    def __init__(self, hidden_channels, out_channels, num_layers):
+        super().__init__()
+        self.hetero_gnn = HeteroGNN(hidden_channels, out_channels, num_layers)
+
+        self.finalW = nn.Sequential(
+            Linear(-1, hidden_channels // 4),
+            nn.ReLU(),
+            Linear(hidden_channels // 4, hidden_channels // 4),
+            nn.ReLU(),
+            Linear(hidden_channels // 4, out_channels),
+        )
+
+    def forward(self, batch):
+        hetero_out = self.hetero_gnn(batch.x_dict, batch.edge_index_dict, batch.batch_dict)
+        return self.finalW(hetero_out).squeeze(axis=-1)
+
+def train_model_social(optimizer, use_gnn=True, exclude_vision=False, exclude_audio=False, exclude_text=False, average_mha=False, num_gat_layers=1, lr_scheduler=None, reduce_on_plateau_lr_scheduler_patience=None, reduce_on_plateau_lr_scheduler_threshold=None, multi_step_lr_scheduler_milestones=None, exponential_lr_scheduler_gamma=None, use_pe=False, use_prune=False):
+    print('Social path!')
+    trk,dek=mmdatasdk.socialiq.standard_folds.standard_train_fold,mmdatasdk.socialiq.standard_folds.standard_valid_fold
+    #This video has some issues in training set
+    bads=['f5NJQiY9AuY','aHBLOkfJSYI']
+    folds=[trk,dek]
+    for bad in bads:
+        for fold in folds:
+            try:
+                fold.remove(bad)
+            except:
+                pass
+
+    preloaded_train=process_data(trk)
+    preloaded_dev=process_data(dek)
+    replace_inf(preloaded_train[3])
+    replace_inf(preloaded_dev[3])
+
+    train_loader = get_loader(preloaded_train)
+    dev_loader = get_loader(preloaded_dev)
+
+    #Initializing parameter optimizer
+    model = SocialModel()
+    model = model.to(device)
+    params= list(model.q_lstm.parameters())+list(model.a_lstm.parameters())+list(model.judge.parameters())
+    optimizer=optim.Adam(params,lr=gc['global_lr'])
+
+    # graph optimizer
+    graph_optimizer = torch.optim.AdamW(
+        model.hetero_gnn.parameters(),
+        lr=gc['global_lr'],
+        weight_decay=gc['weight_decay']
+    )
+
+    print('Training...')
+    for i in range(1, gc['epoch_num']):
+        print ("Epoch %d"%i)
+        losses=[]
+        accs=[]
+        ds_size=len(trk)
+        model.train()
+        for batch_i, batch in enumerate(tqdm(train_loader)):
+            batch = batch.to(device)
+            
+            if batch_i == 0:
+                with torch.no_grad():  # Initialize lazy modules.
+                    model(batch)
+
+            cont = False
+            for mod in mods:
+                if not np.any([mod in elt for elt in batch.edge_index_dict.keys()]):
+                    print(mod, 'dropped from train loader!')
+                    cont = True
+            if cont:
+                continue
+            
+            correct, incorrect = model(batch)
+
+            correct_mean=Variable(torch.Tensor(numpy.array([1.0])),requires_grad=False).cuda()
+            incorrect_mean=Variable(torch.Tensor(numpy.array([0.])),requires_grad=False).cuda()
+
+            optimizer.zero_grad()
+            graph_optimizer.zero_grad()
+
+            loss=(nn.MSELoss()(correct.mean(),correct_mean)+nn.MSELoss()(incorrect.mean(),incorrect_mean))
+            loss.backward()
+            
+            optimizer.step()
+            graph_optimizer.step()
+
+            losses.append(loss.cpu().detach().numpy())
+            accs.append(calc_accuracy(correct,incorrect))
+
+        _accs=[]
+        ds_size=len(dek)
+        model.eval()
+        with torch.no_grad():  # Initialize lazy modules.
+            for batch in dev_loader:
+                batch = batch.to(device)
+                correct, incorrect = model(batch)
+                
+                correct_mean=Variable(torch.Tensor(numpy.array([1.0])),requires_grad=False).cuda()
+                incorrect_mean=Variable(torch.Tensor(numpy.array([0.])),requires_grad=False).cuda()
+                
+                _accs.append(calc_accuracy(correct,incorrect))
+                
+            print ("Dev Acc:",numpy.array(_accs,dtype="float32").mean())
 
 def train_model(optimizer, use_gnn=True, exclude_vision=False, exclude_audio=False, exclude_text=False, average_mha=False, num_gat_layers=1, lr_scheduler=None, reduce_on_plateau_lr_scheduler_patience=None, reduce_on_plateau_lr_scheduler_threshold=None, multi_step_lr_scheduler_milestones=None, exponential_lr_scheduler_gamma=None, use_pe=False, use_prune=False):
     assert lr_scheduler in ['reduce_on_plateau', 'exponential', 'multi_step',
@@ -456,7 +673,6 @@ def train_model(optimizer, use_gnn=True, exclude_vision=False, exclude_audio=Fal
     checkpoint_dir = 'checkpoints'
     if not os.path.exists(checkpoint_dir):
         os.mkdir(checkpoint_dir)
-
     ds = dataset_map[gc['dataset']]
     train_dataset = ds(gc['data_path'], clas="train")
     test_dataset = ds(gc['data_path'], clas="test")
@@ -467,7 +683,7 @@ def train_model(optimizer, use_gnn=True, exclude_vision=False, exclude_audio=Fal
     test_loader, test_labels = get_loader(test_dataset), test_dataset[:][-1]
 
     out_channels = 4 if 'iemocap' in gc['dataset'] else 1
-    model = HeteroGNN(hidden_channels=64, out_channels=out_channels, num_layers=6)
+    model = MosiModel(64, out_channels, 6)
     model = model.to(device)
     
     optimizer = torch.optim.AdamW(
@@ -528,7 +744,7 @@ if __name__ == "__main__":
     get_arguments() # updates gc
 
     assert gc['dataroot'] is not None, "You havn't provided the dataset path! Use the default one."
-    assert gc['task'] in ['mosi', 'mosei', 'mosi_unaligned', 'mosei_unaligned', 'iemocap', 'iemocap_unaligned'], "Unsupported task. Should be either mosi or mosei"
+    assert gc['task'] in ['mosi', 'mosei', 'mosi_unaligned', 'mosei_unaligned', 'iemocap', 'iemocap_unaligned', 'social_unaligned'], "Unsupported task. Should be either mosi or mosei"
 
     gc['data_path'] = gc['dataroot']
     gc['dataset'] = gc['task']
@@ -536,7 +752,9 @@ if __name__ == "__main__":
     if not gc['eval']:
         start_time = time.time()
         util.set_seed(gc['seed'])
-        best_results = train_model(gc['optimizer'],
+        
+        train_fn = train_model if 'social' not in gc['dataset'] else train_model_social
+        best_results = train_fn(gc['optimizer'],
                                    use_gnn=gc['useGNN'],
                                    average_mha=gc['average_mha'],
                                    num_gat_layers=gc['num_gat_layers'],
