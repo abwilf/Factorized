@@ -40,13 +40,13 @@ class MoseiDatasetUnaligned(Data.Dataset):
 
 
     def load_data(self):
-        if gc.data_path[-1] != '/':
-            gc.data_path = gc.data_path + '/'
-        dataset = pickle.load(open(gc.data_path + 'mosei_senti_data_noalign.pkl', 'rb'))
-        gc.padding_len = dataset['test']['text'].shape[1]
-        gc.config['text_dim'] = dataset['test']['text'].shape[2]
-        gc.config['audio_dim'] = dataset['test']['audio'].shape[2]
-        gc.config['vision_dim'] = dataset['test']['vision'].shape[2]
+        if gc['data_path'][-1] != '/':
+            gc['data_path'] = gc['data_path'] + '/'
+        dataset = pickle.load(open(gc['data_path'] + 'mosei_senti_data_noalign.pkl', 'rb'))
+        gc['padding_len'] = dataset['test']['text'].shape[1]
+        gc['text_dim'] = dataset['test']['text'].shape[2]
+        gc['audio_dim'] = dataset['test']['audio'].shape[2]
+        gc['vision_dim'] = dataset['test']['vision'].shape[2]
 
         for ds, split_type in [(MoseiDatasetUnaligned.trainset, 'train'), (MoseiDatasetUnaligned.validset, 'valid'),
                                (MoseiDatasetUnaligned.testset, 'test')]:
@@ -67,4 +67,4 @@ class MoseiDatasetUnaligned(Data.Dataset):
 
 
 if __name__ == "__main__":
-    dataset = MoseiDatasetUnaligned(gc.data_path)
+    dataset = MoseiDatasetUnaligned(gc['data_path'])

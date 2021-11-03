@@ -203,7 +203,17 @@ def get_masked(arr):
     if (arr==0).all():
         return torch.tensor([]).long()
     else:
-        return arr[torch.argmax(~((arr==0).all(dim=-1)).to(torch.long)):]
+        if 'mosi' in gc['dataset']: # front padded
+            idx = (arr==0).all(dim=-1).to(torch.long).argmin()
+            return arr[idx:]
+
+        elif 'social' in gc['dataset']: # back padded
+            # find idx of last zero element looking from back to front
+            idx = (arr==0).all(dim=-1).to(torch.long).flip(dims=[0]).argmin()
+            return arr[:-idx]
+            
+        else: 
+            assert False, 'Only social and mosi are supported right now.  To add another dataset, break here and see whether front or back padded to seq len'
 
 def get_loader(ds):
     words = ds[:][0]
@@ -264,7 +274,7 @@ def get_loader(ds):
                         ret = ret[:3]
 
                     data[mod, 'pres', mod2], data[mod, 'fut', mod2], data[mod, 'past', mod2] = ret
-                 
+        
         # quick assertions
         # for mod in mods:
         #     assert isinstance(data[mod], torch.Tensor)
@@ -287,6 +297,9 @@ def get_loader(ds):
                 'trs': words[i],
                 'acc': covarep[i],
             }
+        
+            # if gc['qa_strat']==1:
+
         hetero_data = HeteroData(hetero_data)
         
         # hetero_data = T.AddSelfLoops()(hetero_data) # todo: include this as a HP to see if it does anything!
@@ -613,7 +626,7 @@ def train_model_social(optimizer, use_gnn=True, exclude_vision=False, exclude_au
     )
 
     print('Training...')
-    for i in range(1, gc['epoch_num']):
+    for i in range(gc['epochs']):
         print ("Epoch %d"%i)
         losses=[]
         accs=[]
@@ -705,7 +718,7 @@ def train_model(optimizer, use_gnn=True, exclude_vision=False, exclude_audio=Fal
     best_mae = 1
     best_test_acc = 0
     best_valid_acc = 0
-    for epoch in range(gc['epoch_num']):
+    for epoch in range(gc['epochs']):
         loss, y_trues_train, y_preds_train = train(train_loader, model, optimizer)
         train_res = eval_fn('train', y_preds_train, y_trues_train)
         train_acc, train_mae = train_res['acc_2'], train_res['mae']
