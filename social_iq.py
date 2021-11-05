@@ -28,18 +28,18 @@ print ("If you do happen to get nans, then the reason is the most recent acousti
 
 
 #Loading the data of Social-IQ
-#Yellow warnings fro SDK are ok!
-if os.path.isdir("./deployed/") is False:
-	print ("Need to run the modality alignment first")
-	exit()
-	from alignment import align,myavg
-	align()
+# #Yellow warnings fro SDK are ok!
+# if os.path.isdir("/work/awilf/MTAG/deployed/") is False:
+# 	print ("Need to run the modality alignment first")
+# 	exit()
+# 	from alignment import align,myavg
+# 	align()
  
 paths={}
-paths["QA_BERT_lastlayer_binarychoice"]="../Social-IQ/socialiq/SOCIAL-IQ_QA_BERT_LASTLAYER_BINARY_CHOICE.csd"
-paths["DENSENET161_1FPS"]="./deployed/b'SOCIAL_IQ_DENSENET161_1FPS'.csd"
-paths["Transcript_Raw_Chunks_BERT"]="./deployed/b'SOCIAL_IQ_TRANSCRIPT_RAW_CHUNKS_BERT'.csd"
-paths["Acoustic"]="./deployed/b'SOCIAL_IQ_COVAREP'.csd"
+paths["QA_BERT_lastlayer_binarychoice"]="/work/awilf/Social-IQ/socialiq/SOCIAL-IQ_QA_BERT_LASTLAYER_BINARY_CHOICE.csd"
+paths["DENSENET161_1FPS"]="/work/awilf/MTAG/deployed/b'SOCIAL_IQ_DENSENET161_1FPS'.csd"
+paths["Transcript_Raw_Chunks_BERT"]="/work/awilf/MTAG/deployed/b'SOCIAL_IQ_TRANSCRIPT_RAW_CHUNKS_BERT'.csd"
+paths["Acoustic"]="/work/awilf/MTAG/deployed/b'SOCIAL_IQ_COVAREP'.csd"
 social_iq=mmdatasdk.mmdataset(paths)
 social_iq.unify() 
 

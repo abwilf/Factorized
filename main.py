@@ -32,6 +32,10 @@ from arg_defaults import defaults
 from consts import GlobalConsts as gc
 
 from alex_utils import *
+
+SG_PATH = '/work/awilf/Standard-Grid'
+import sys
+sys.path.append(SG_PATH)
 import standard_grid
 
 import gc as g
@@ -550,10 +554,10 @@ def feed_forward(q,a,i,vis,trs,acc,q_lstm,a_lstm,v_lstm,t_lstm,ac_lstm,mfn_mem,m
     return q_rep,a_rep,i_rep,t_rep_extended,v_rep_extended,ac_rep_extended,mfn_final
 
 paths={}
-paths["QA_BERT_lastlayer_binarychoice"]="../Social-IQ/socialiq/SOCIAL-IQ_QA_BERT_LASTLAYER_BINARY_CHOICE.csd"
-paths["DENSENET161_1FPS"]="./deployed/b'SOCIAL_IQ_DENSENET161_1FPS'.csd"
-paths["Transcript_Raw_Chunks_BERT"]="./deployed/b'SOCIAL_IQ_TRANSCRIPT_RAW_CHUNKS_BERT'.csd"
-paths["Acoustic"]="./deployed/b'SOCIAL_IQ_COVAREP'.csd"
+paths["QA_BERT_lastlayer_binarychoice"]="/work/awilf/Social-IQ/socialiq/SOCIAL-IQ_QA_BERT_LASTLAYER_BINARY_CHOICE.csd"
+paths["DENSENET161_1FPS"]="/work/awilf/MTAG/deployed/b'SOCIAL_IQ_DENSENET161_1FPS'.csd"
+paths["Transcript_Raw_Chunks_BERT"]="/work/awilf/MTAG/deployed/b'SOCIAL_IQ_TRANSCRIPT_RAW_CHUNKS_BERT'.csd"
+paths["Acoustic"]="/work/awilf/MTAG/deployed/b'SOCIAL_IQ_COVAREP'.csd"
 social_iq=mmdatasdk.mmdataset(paths)
 social_iq.unify() 
 
@@ -920,6 +924,7 @@ def get_arguments():
         gc[arg] = val
 
 if __name__ == "__main__":
+    print('hi!!')
     get_arguments() # updates gc
 
     assert gc['dataroot'] is not None, "You havn't provided the dataset path! Use the default one."
@@ -944,6 +949,8 @@ if __name__ == "__main__":
                                    exponential_lr_scheduler_gamma=gc['exponential_lr_scheduler_gamma'],
                                    use_pe=gc['use_pe'],
                                    use_prune=gc['use_prune'])
+        # best_results = {'a': 2}
+
         elapsed_time = time.time() - start_time
         out_dir = "output/"
         mkdirp(out_dir)
