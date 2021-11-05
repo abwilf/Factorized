@@ -320,7 +320,6 @@ def get_loader(ds):
     loader = DataLoader(total_data, batch_size=gc['batch_size'], shuffle=True)
     return loader
 
-
 class HeteroGNN(torch.nn.Module):
     def __init__(self, hidden_channels, out_channels, num_layers):
         super().__init__()
@@ -429,7 +428,7 @@ def train(train_loader, model, optimizer):
         criterion = IEMOCAPInverseSampleCountCELoss()
         criterion.to(device)
     else: # mosi
-        nn.SmoothL1Loss()
+        criterion = nn.SmoothL1Loss()
     for batch_i, data in enumerate(tqdm(train_loader)): # need index to prune edges
         if 'iemocap' in gc['dataset']:
             data.y = data.y.reshape(-1,4)
@@ -768,6 +767,9 @@ def train_model_social(optimizer, use_gnn=True, exclude_vision=False, exclude_au
     )
 
     print('Training...')
+    best = {'acc': 0}
+    valid_best = {'acc': 0}
+
     for i in range(gc['epochs']):
         print ("Epoch %d"%i)
         losses=[]
@@ -817,9 +819,14 @@ def train_model_social(optimizer, use_gnn=True, exclude_vision=False, exclude_au
                 correct_mean=Variable(torch.Tensor(numpy.array([1.0])),requires_grad=False).cuda()
                 incorrect_mean=Variable(torch.Tensor(numpy.array([0.])),requires_grad=False).cuda()
                 
-                _accs.append(calc_accuracy(correct,incorrect))
+                acc = calc_accuracy(correct,incorrect)
+                _accs.append(acc)
+
+                if acc > valid_best['acc']:
+                    valid_best['acc'] = acc
                 
             print ("Dev Acc:",numpy.array(_accs,dtype="float32").mean())
+        return {k: float(v) for k,v in valid_best.items()}
 
 def train_model(optimizer, use_gnn=True, exclude_vision=False, exclude_audio=False, exclude_text=False, average_mha=False, num_gat_layers=1, lr_scheduler=None, reduce_on_plateau_lr_scheduler_patience=None, reduce_on_plateau_lr_scheduler_threshold=None, multi_step_lr_scheduler_milestones=None, exponential_lr_scheduler_gamma=None, use_pe=False, use_prune=False):
     assert lr_scheduler in ['reduce_on_plateau', 'exponential', 'multi_step',
@@ -857,12 +864,11 @@ def train_model(optimizer, use_gnn=True, exclude_vision=False, exclude_audio=Fal
     }
     eval_fn = eval_fns[gc['dataset']]
 
-    best_mae = 1
-    best_test_acc = 0
-    best_valid_acc = 0
-
     best_valid_ie_f1s = {emo: 0 for emo in ie_emos}
     best_test_ie_f1s = {emo: 0 for emo in ie_emos}
+    best = { 'mae': 0, 'corr': 0, 'acc_2': 0, 'acc_7': 0, 'ex_zero_acc': 0, 'f1_raven': 0, 'f1_mult': 0, }
+    valid_best = { 'mae': 0, 'corr': 0, 'acc_2': 0, 'acc_7': 0, 'ex_zero_acc': 0, 'f1_raven': 0, 'f1_mult': 0, }
+
 
     for epoch in range(gc['epochs']):
         loss, y_trues_train, y_preds_train = train(train_loader, model, optimizer)
@@ -880,24 +886,24 @@ def train_model(optimizer, use_gnn=True, exclude_vision=False, exclude_audio=Fal
                     best_valid_ie_f1s[emo] = valid_res['f1'][emo]
                     best_test_ie_f1s[emo] = test_res['f1'][emo]
             print(f'Epoch: {epoch:03d}, Loss: {loss:.4f} Valid: '+str([f'{emo}: {valid_res["f1"][emo]:.4f} ' for emo in ie_emos]), 'Test: '+str([f'{emo}: {test_res["f1"][emo]:.4f} ' for emo in ie_emos]))
-        
+
         else: # mosi/mosei
-            train_acc, train_mae = train_res['acc_2'], train_res['mae']
-            valid_acc, valid_mae = valid_res['acc_2'], valid_res['mae']
-            test_acc, test_mae = test_res['acc_2'], test_res['mae']
+            if valid_res['acc_2'] > valid_best['acc_2']:
+                for k in valid_best.keys():
+                    valid_best[k] = valid_res[k]
 
-            if valid_acc < best_valid_acc:
-                best_mae = mae
-                best_test_acc = test_acc
-                best_valid_acc = valid_acc
+                for k in best.keys():
+                    best[k] = test_res[k]
 
-            print(f'Epoch: {epoch:03d}, Loss: {loss:.4f}, Train: {train_acc:.4f}, ' f'Valid: {valid_acc:.4f}, Test: {test_acc:.4f}')
+            print(f'Epoch: {epoch:03d}, Loss: {loss:.4f}, Train: {train_res["acc_2"]:.4f}, ' f'Valid: {valid_res["acc_2"]:.4f}, Test: {test_res["acc_2"]:.4f}')
         
     if 'iemocap' in gc['dataset']:
         print('\n Test f1s at valid best:', best_test_ie_f1s)
         print('\n Valid f1s at valid best:', best_valid_ie_f1s)
+        return best_test_ie_f1s
     else:
-        print(f'\nBest test acc: {best_test_acc:.4f},\nBest valid acc: {best_valid_acc:.4f}')
+        print(f'\nBest test acc: {best["acc_2"]:.4f}')
+        return {k: float(v) for k,v in best.items()}
 
     print('Model parameters:', count_params(model))
 
@@ -940,10 +946,9 @@ if __name__ == "__main__":
                                    use_prune=gc['use_prune'])
         elapsed_time = time.time() - start_time
         out_dir = "output/"
-        if not os.path.isdir(out_dir):
-            os.makedirs(out_dir)
-        res_f = open(os.path.join(out_dir, "best.txt"), "w")
-        res_f.write(json.dumps(best_results))
+        mkdirp(out_dir)
+
+        save_json(join(out_dir, 'results.txt'), best_results)
     
     else:
         assert gc['resume_pt'] is not None
