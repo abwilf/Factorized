@@ -12,7 +12,6 @@ import time
 import scipy.misc
 import os
 import mylstm
-import h5py
 import mmsdk
 from mmsdk import mmdatasdk
 from mmsdk.mmmodelsdk.fusion import TensorFusion
@@ -99,19 +98,26 @@ def build_trs(trs,keys):
 		trs_features.append(this_trs)
 	return numpy.array(trs_features,dtype="float32").transpose(1,0,2)
  
-def process_data(keys):
+def process_data(keys, name):
+	save_path = f'/work/awilf/{name}.pk'
+	res = load_pk(save_path)
+	if res is None:
+		print(f'Building and writing processed data for {save_path}')
+		qa_glove=social_iq["QA_BERT_lastlayer_binarychoice"]
+		visual=social_iq["DENSENET161_1FPS"]
+		transcript=social_iq["Transcript_Raw_Chunks_BERT"]
+		acoustic=social_iq["Acoustic"]
 
-	qa_glove=social_iq["QA_BERT_lastlayer_binarychoice"]
-	visual=social_iq["DENSENET161_1FPS"]
-	transcript=social_iq["Transcript_Raw_Chunks_BERT"]
-	acoustic=social_iq["Acoustic"]
+		qas=build_qa_binary(qa_glove,keys)
+		visual=build_visual(visual,keys)
+		trs=build_trs(transcript,keys)	
+		acc=build_acc(acoustic,keys)
 
-	qas=build_qa_binary(qa_glove,keys)
-	visual=build_visual(visual,keys)
-	trs=build_trs(transcript,keys)	
-	acc=build_acc(acoustic,keys)	
-	
-	return qas,visual,trs,acc
+		res = qas,visual,trs,acc
+		save_pk(save_path, res)
+	else:
+		print('Loading processed data')
+	return res
 
 def to_pytorch(_input):
 	return Variable(torch.tensor(_input)).cuda()

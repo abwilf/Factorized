@@ -1,0 +1,37 @@
+Bootstrap: docker
+
+From: nvidia/cuda:10.2-cudnn7-devel-ubuntu16.04
+
+%post
+CURDIR=`pwd`
+
+apt-get update
+apt-get install -y gcc-5 g++-5
+update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-5 60 --slave /usr/bin/g++ g++ /usr/bin/g++-5
+apt-get install -y aptitude
+aptitude install build-essential
+
+apt-get update
+apt-get install -y tmux nano git wget
+
+apt-get install -y --no-install-recommends make build-essential libssl-dev zlib1g-dev libbz2-dev libreadline-dev libsqlite3-dev wget curl llvm libncurses5-dev xz-utils tk-dev libxml2-dev libxmlsec1-dev libffi-dev liblzma-dev
+
+apt-get install -y gfortran libopenblas-dev liblapack-dev
+
+
+export PYENV_ROOT=/opt/pyenv
+export PATH="/opt/pyenv/bin:$PATH"
+curl -L https://github.com/pyenv/pyenv-installer/raw/master/bin/pyenv-installer | bash
+pyenv install 3.7.2
+echo 'export PATH=/opt/pyenv/versions/3.7.2/bin/:$PATH' >> $SINGULARITY_ENVIRONMENT
+export PATH=/opt/pyenv/versions/3.7.2/bin/:$PATH
+
+pip install torch==1.8.1
+pip install scipy==1.2.1
+
+
+mkdir -p $SINGULARITY_ROOTFS/tmp/sing_build_cuda
+cd $SINGULARITY_ROOTFS/tmp/sing_build_cuda
+
+export TORCH_CUDA_ARCH_LIST="5.0 6.1"
+
