@@ -42,7 +42,9 @@ import gc as g
 from sklearn.metrics import accuracy_score
 
 from torch_geometric.nn import Linear
-from torch_geometric.nn import HeteroConv, GCNConv, SAGEConv, GATConv, GATv2Conv, Linear
+
+from hetero_conv import HeteroConv
+from torch_geometric.nn import GCNConv, SAGEConv, GATConv, GATv2Conv, Linear
 from torch_scatter import scatter_mean
 import torch.nn.functional as F
 from gatv3conv import GATv3Conv
@@ -463,7 +465,8 @@ def train(train_loader, model, optimizer):
         else:
             loss = criterion(out, data.y)
         
-        loss = loss / torch.abs(loss.detach()) # norm
+        if gc['use_loss_norm']:
+            loss = loss / torch.abs(loss.detach()) # norm
 
         loss.backward()
         optimizer.step()
@@ -559,10 +562,31 @@ paths["DENSENET161_1FPS"]="/work/awilf/MTAG/deployed/b'SOCIAL_IQ_DENSENET161_1FP
 paths["Transcript_Raw_Chunks_BERT"]="/work/awilf/MTAG/deployed/b'SOCIAL_IQ_TRANSCRIPT_RAW_CHUNKS_BERT'.csd"
 paths["Acoustic"]="/work/awilf/MTAG/deployed/b'SOCIAL_IQ_COVAREP'.csd"
 social_iq=mmdatasdk.mmdataset(paths)
-social_iq.unify() 
+social_iq.unify()
+NUM_QS = 6
 
 
 qa_conns = [('text', 'text_q', 'q'), ('text', 'text_a', 'a'), ('audio', 'audio_q', 'q'), ('audio', 'audio_a', 'a'), ('video', 'video_q', 'q'), ('video', 'video_a', 'a'), ('q', 'q_a', 'a')]
+
+def get_mesh(a,b): # a is first set of indices, b is second
+    # return torch.Tensor(np.array(np.meshgrid(a, b))).reshape(2,-1).to(torch.long)
+    return torch.cat([elt.unsqueeze(0) for elt in torch.meshgrid(a,b)]).reshape(2,-1).to(torch.long)
+
+def get_q_mod_edges(q, v, bi): # q is question indices, v is modality indices, bi is batch indices of modality
+    # split original modality into batches
+    idxs = torch.where(torch.diff(bi))[0]+1
+    if idxs.shape[0] == 0:
+        splits = [v]
+    else:
+        splits = torch.split(v, idxs)
+
+    meshs = []
+    for i, split in enumerate(splits):
+        qs = q[NUM_QS*i:NUM_QS*(i+1)]
+        meshs.append(get_mesh(split, qs))
+
+    all_edges = (torch.cat(meshs, dim=-1)).to(torch.long)
+    return all_edges
 
 class GraphQA_HeteroGNN(torch.nn.Module):
     def __init__(self, hidden_channels, out_channels, num_layers):
@@ -594,7 +618,8 @@ class GraphQA_HeteroGNN(torch.nn.Module):
                     lin_r,
                     gc['graph_conv_in_dim'], 
                     hidden_channels//self.heads,
-                    heads=self.heads
+                    heads=self.heads,
+                    dropout=gc['drop_het'],
                 )
                 if mod_l not in mods_seen:
                     mods_seen[mod_l] = _conv.lin_l
@@ -626,6 +651,15 @@ class GraphQA_HeteroGNN(torch.nn.Module):
 
     def forward(self, x_dict, edge_index_dict, batch_dict, q_rep, a_rep, i_rep):
         x_dict = { key: self.map_x(x, key) for key, x in x_dict.items() }
+
+        # # build qa graph
+        # q_edges = {}
+        # for mod in mods:
+        #     q = torch.arange(q_rep.shape[0]).to(device) # q indices
+        #     v = torch.arange(x_dict[mod].shape[0]).to(device)
+        #     bi = batch_dict[mod]
+        #     edges = get_q_mod_edges(q, v, bi)
+        #     q_edges[mod, f'{mod}_q', 'q'] = edges
 
         # apply pe
         for m, v in x_dict.items(): # modality, tensor
@@ -663,11 +697,17 @@ class GraphQA_SocialModel(torch.nn.Module):
         self.hetero_gnn = GraphQA_HeteroGNN(gc['graph_conv_in_dim'], 1, gc['num_gat_layers'])
 
     def forward(self, batch):
-        q = batch.q.reshape(-1, 6, *batch.q.shape[1:])
+        if gc['graph_qa']:
+            q = batch.q[:,0,0,:,:]
+            q_rep=self.q_lstm.step(q.transpose(1,0))[1][0][0,:,:]
+
+        else:
+            q = batch.q.reshape(-1, 6, *batch.q.shape[1:])
+            q_rep=self.q_lstm.step(to_pytorch(flatten_qail(q)))[1][0][0,:,:]
+        
         a = batch.a.reshape(-1, 6, *batch.a.shape[1:])
         inc = batch.inc.reshape(-1, 6, *batch.inc.shape[1:])
         
-        q_rep=self.q_lstm.step(to_pytorch(flatten_qail(q)))[1][0][0,:,:]
         a_rep=self.a_lstm.step(to_pytorch(flatten_qail(a)))[1][0][0,:,:]
         i_rep=self.a_lstm.step(to_pytorch(flatten_qail(inc)))[1][0][0,:,:]
 
@@ -690,8 +730,10 @@ class SocialModel(torch.nn.Module):
         
         self.judge = nn.Sequential(OrderedDict([
             ('fc0',   nn.Linear(214,25)),
+            ('drop_1', nn.Dropout(p=gc['drop_1'])),
             ('sig0', nn.Sigmoid()),
             ('fc1',   nn.Linear(25,1)),
+            ('drop_2', nn.Dropout(p=gc['drop_2'])),
             ('sig1', nn.Sigmoid())
         ]))
 
@@ -723,7 +765,9 @@ class MosiModel(torch.nn.Module):
         self.finalW = nn.Sequential(
             Linear(-1, hidden_channels // 4),
             nn.ReLU(),
+            nn.Dropout(p=gc['drop_1']),
             Linear(hidden_channels // 4, hidden_channels // 4),
+            nn.Dropout(p=gc['drop_2']),
             nn.ReLU(),
             Linear(hidden_channels // 4, out_channels),
         )
@@ -745,8 +789,8 @@ def train_model_social(optimizer, use_gnn=True, exclude_vision=False, exclude_au
             except:
                 pass
 
-    preloaded_train=process_data(trk)
-    preloaded_dev=process_data(dek)
+    preloaded_train=process_data(trk, 'train')
+    preloaded_dev=process_data(dek, 'dev')
     replace_inf(preloaded_train[3])
     replace_inf(preloaded_dev[3])
 
@@ -830,7 +874,7 @@ def train_model_social(optimizer, use_gnn=True, exclude_vision=False, exclude_au
                     valid_best['acc'] = acc
                 
             print ("Dev Acc:",numpy.array(_accs,dtype="float32").mean())
-        return {k: float(v) for k,v in valid_best.items()}
+    return {k: float(v) for k,v in valid_best.items()}
 
 def train_model(optimizer, use_gnn=True, exclude_vision=False, exclude_audio=False, exclude_text=False, average_mha=False, num_gat_layers=1, lr_scheduler=None, reduce_on_plateau_lr_scheduler_patience=None, reduce_on_plateau_lr_scheduler_threshold=None, multi_step_lr_scheduler_milestones=None, exponential_lr_scheduler_gamma=None, use_pe=False, use_prune=False):
     assert lr_scheduler in ['reduce_on_plateau', 'exponential', 'multi_step',

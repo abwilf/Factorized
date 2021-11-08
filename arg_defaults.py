@@ -5,7 +5,7 @@ defaults = [
     ("--exclude_audio", bool, False),
     ("--exclude_text", bool, False),
     ("--batch_size", int, 2),
-    ("--epoch_num", int, 50),
+    ("--epochs", int, 50),
     ("--cuda", int, 0),
     ("--global_lr", float, 1e-4),
     ("--gru_lr", float, 1e-4),
@@ -44,12 +44,19 @@ defaults = [
     ("--loss_type", str, "mse"),
     ("--remove_isolated", int, 0),
     ("--use_conv1d", int, 0),
+    ("--hidden_dim", int, 50),
+    ("--graph_qa", int, 1),
 
     ("--use_loss_norm", int, 0),
     ("--use_all_to_all", int, 0),
     ("--checkpoints", str, '9,12,15,20'),
     ("--use_iemocap_inverse_sample_count_ce_loss", int, 0),
+    ("--drop_1", float, 0.1),
+    ("--drop_2", float, 0.1),
+    ("--drop_het", float, 0.1),
 
+    # social-iq modeling
+    ("--qa_strat", int, 0), # 0 q and a not part of graph; 1 connect q and a to all: feed contextual reps of q and a (self conns; rest of graph has been contextualized. Or not) through judge; 2 Find most important nodes through attentions, form qa graph w just them; 3 Stack these most important nodes in Temporal order; perform attention across this stack with query and answer as keys; feed outputs through judge;
     # masking out certain modalities
     ("--zero_out_video", int, 0),
     ("--zero_out_text",  int, 0),

@@ -99,7 +99,7 @@ def build_trs(trs,keys):
 	return numpy.array(trs_features,dtype="float32").transpose(1,0,2)
  
 def process_data(keys, name):
-	save_path = f'/work/awilf/{name}.pk'
+	save_path = f'/work/awilf/MTAG/{name}_social.pk'
 	res = load_pk(save_path)
 	if res is None:
 		print(f'Building and writing processed data for {save_path}')
