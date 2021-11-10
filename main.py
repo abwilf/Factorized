@@ -238,6 +238,13 @@ def get_loader(ds):
             'audio': get_masked(covarep[i]),
             'video': get_masked(facet[i]),
         }
+
+        if gc['zero_out_video']:
+            data['video'][:]=0
+        if gc['zero_out_audio']:
+            data['audio'][:]=0
+        if gc['zero_out_text']:
+            data['text'][:]=0
         
         if sum([len(v) for v in data.values()]) == 0:
             continue
@@ -301,7 +308,6 @@ def get_loader(ds):
                     'inc': {'x': inc[i]},
                 }
 
-
             hetero_data = {
                 **hetero_data,
                 'q': q[i],
@@ -320,11 +326,70 @@ def get_loader(ds):
         # hetero_data = T.AddSelfLoops()(hetero_data) # todo: include this as a HP to see if it does anything!
         if 'social' not in gc['dataset']:
             hetero_data.y = ds[i][-1]
+            hetero_data.id = ds.ids[i]
         
         total_data.append(hetero_data)
 
-    loader = DataLoader(total_data, batch_size=gc['batch_size'], shuffle=True)
+    loader = DataLoader(total_data, batch_size=gc['batch_size'], shuffle=False)
     return loader
+
+
+
+class SocialModel(torch.nn.Module):
+    def __init__(self):
+        super().__init__()
+        
+        self.q_lstm=mylstm.MyLSTM(768,50)
+        self.a_lstm=mylstm.MyLSTM(768,50)
+        
+        self.judge = nn.Sequential(OrderedDict([
+            ('fc0',   nn.Linear(214,25)),
+            ('drop_1', nn.Dropout(p=gc['drop_1'])),
+            ('sig0', nn.Sigmoid()),
+            ('fc1',   nn.Linear(25,1)),
+            ('drop_2', nn.Dropout(p=gc['drop_2'])),
+            ('sig1', nn.Sigmoid())
+        ]))
+
+        self.hetero_gnn = HeteroGNN(gc['graph_conv_in_dim'], 1, gc['num_gat_layers'])
+
+    def forward(self, batch):
+        hetero_out = self.hetero_gnn(batch.x_dict, batch.edge_index_dict, batch.batch_dict)
+        hetero_reshaped = hetero_out[:,None,:].expand(-1, 12*6, -1).reshape(-1, gc['graph_conv_in_dim'])
+        hetero_normed = (hetero_reshaped - hetero_reshaped.mean(dim=-1)[:,None]) / (hetero_reshaped.std(dim=-1)[:,None] + 1e-6)
+
+        q = batch.q.reshape(-1, 6, *batch.q.shape[1:])
+        a = batch.a.reshape(-1, 6, *batch.a.shape[1:])
+        inc = batch.inc.reshape(-1, 6, *batch.inc.shape[1:])
+        
+        q_rep=self.q_lstm.step(to_pytorch(flatten_qail(q)))[1][0][0,:,:]
+        a_rep=self.a_lstm.step(to_pytorch(flatten_qail(a)))[1][0][0,:,:]
+        i_rep=self.a_lstm.step(to_pytorch(flatten_qail(inc)))[1][0][0,:,:]
+
+        correct=self.judge(torch.cat((q_rep,a_rep,i_rep,hetero_normed),1))
+        incorrect=self.judge(torch.cat((q_rep,i_rep,a_rep,hetero_normed),1))
+
+        return correct, incorrect
+
+class MosiModel(torch.nn.Module):
+    def __init__(self, hidden_channels, out_channels, num_layers):
+        super().__init__()
+        self.hetero_gnn = HeteroGNN(hidden_channels, out_channels, num_layers)
+
+        self.finalW = nn.Sequential(
+            Linear(-1, hidden_channels // 4),
+            nn.ReLU(),
+            nn.Dropout(p=gc['drop_1']),
+            Linear(hidden_channels // 4, hidden_channels // 4),
+            nn.Dropout(p=gc['drop_2']),
+            nn.ReLU(),
+            Linear(hidden_channels // 4, out_channels),
+        )
+
+    def forward(self, batch):
+        hetero_out = self.hetero_gnn(batch.x_dict, batch.edge_index_dict, batch.batch_dict)
+        return self.finalW(hetero_out).squeeze(axis=-1)
+
 
 class HeteroGNN(torch.nn.Module):
     def __init__(self, hidden_channels, out_channels, num_layers):
@@ -421,7 +486,6 @@ class HeteroGNN(torch.nn.Module):
         x = scatter_mean(x,batch_dicts, dim=0)
         return x
 
-
 def count_params(model): 
     return sum(p.numel() for p in model.parameters() if p.requires_grad)
 
@@ -490,6 +554,7 @@ def train(train_loader, model, optimizer):
 def test(loader, model, scheduler, valid):
     y_trues = []
     y_preds = []
+    ids = []
     model.eval()
 
     l = 0.0
@@ -502,6 +567,8 @@ def test(loader, model, scheduler, valid):
         if cont:
             continue
 
+        if 'aiEXnCPZubE_24' in data.id:
+            a=2
         data = data.to(device)
         if 'iemocap' in gc['dataset']:
             data.y = data.y.reshape(-1,4)
@@ -518,6 +585,7 @@ def test(loader, model, scheduler, valid):
         
         y_trues.extend(y_true)
         y_preds.extend(y_pred)
+        ids.extend(data.id)
 
         del data
         del out
@@ -564,9 +632,46 @@ paths["Acoustic"]="/work/awilf/MTAG/deployed/b'SOCIAL_IQ_COVAREP'.csd"
 social_iq=mmdatasdk.mmdataset(paths)
 social_iq.unify()
 NUM_QS = 6
+NUM_A_COMBS = 12
 
+qa_conns = [
+    ('text', 'text_q', 'q'),
+    ('audio', 'audio_q', 'q'), 
+    ('video', 'video_q', 'q'), 
+    
+    ('text', 'text_a', 'a'), 
+    ('audio', 'audio_a', 'a'), 
+    ('video', 'video_a', 'a'),
 
-qa_conns = [('text', 'text_q', 'q'), ('text', 'text_a', 'a'), ('audio', 'audio_q', 'q'), ('audio', 'audio_a', 'a'), ('video', 'video_q', 'q'), ('video', 'video_a', 'a'), ('q', 'q_a', 'a')]
+    # flipped above
+    ('q', 'q_text','text'),
+    ('q', 'q_audio','audio'), 
+    ('q', 'q_video','video'), 
+    
+    ('a', 'a_text','text'), 
+    ('a', 'a_audio','audio'), 
+    ('a', 'a_video','video'),
+
+    ('q', 'q_a', 'a'),
+    ('a', 'a_q', 'q'),
+
+    # a to i
+    ('a', 'ai', 'a'),
+
+    # self conns
+    ('a', 'a_a', 'a'),
+    ('q', 'q_q', 'q'),
+]
+
+def bds_to_conns(a,b): # a is batch_dict_1, b is batch_dict_2
+    '''
+    e.g.
+    a = torch.from_numpy(ar([0,0,1,1,2,2,3]))
+    b = torch.from_numpy(ar([0,1,2,3]))
+    '''
+    b = b[:,None].expand(-1,a.shape[0])
+    b_to_a = torch.vstack(torch.where(a[None,:]==b)) # top is b idxs, bot is a idxs
+    return b_to_a
 
 def get_mesh(a,b): # a is first set of indices, b is second
     # return torch.Tensor(np.array(np.meshgrid(a, b))).reshape(2,-1).to(torch.long)
@@ -607,7 +712,7 @@ class GraphQA_HeteroGNN(torch.nn.Module):
             # UNCOMMENT FOR PARAMETER SHARING
             mods_seen = {} # mapping from mod to the gatv3conv linear layer for it
             d = {}
-            for conn_type in all_connections:
+            for conn_type in all_connections + qa_conns:
                 mod_l, _, mod_r = conn_type
 
                 lin_l = None if mod_l not in mods_seen else mods_seen[mod_l]
@@ -631,11 +736,11 @@ class GraphQA_HeteroGNN(torch.nn.Module):
 
             self.convs.append(conv)
 
-            conv = HeteroConv({
-                conn_type: GATv2Conv(gc['graph_conv_in_dim'], hidden_channels//self.heads, heads=self.heads)
-                for conn_type in qa_conns
-            }, aggr='mean')
-            self.qa_convs.append(conv)
+            # conv = HeteroConv({
+            #     conn_type: GATv2Conv(gc['graph_conv_in_dim'], hidden_channels//self.heads, heads=self.heads)
+            #     for conn_type in qa_conns+all_connections
+            # }, aggr='mean')
+            # self.qa_convs.append(conv)
 
         self.pes = {k: PositionalEncoding(gc['graph_conv_in_dim']) for k in mods}
 
@@ -650,45 +755,94 @@ class GraphQA_HeteroGNN(torch.nn.Module):
             assert False, key+' not an accepted key!'
 
     def forward(self, x_dict, edge_index_dict, batch_dict, q_rep, a_rep, i_rep):
+        # linearly project modalities
         x_dict = { key: self.map_x(x, key) for key, x in x_dict.items() }
-
-        # # build qa graph
-        # q_edges = {}
-        # for mod in mods:
-        #     q = torch.arange(q_rep.shape[0]).to(device) # q indices
-        #     v = torch.arange(x_dict[mod].shape[0]).to(device)
-        #     bi = batch_dict[mod]
-        #     edges = get_q_mod_edges(q, v, bi)
-        #     q_edges[mod, f'{mod}_q', 'q'] = edges
-
+        
         # apply pe
         for m, v in x_dict.items(): # modality, tensor
             idxs = batch_dict[m]
             assert (idxs==(idxs.sort().values)).all()
             _, counts = torch.unique(idxs, return_counts=True)
             x_dict[m] = self.pes[m](v, counts)
+        
+        # add qa to x_dict
+        x_dict['q'] = q_rep
+        a_idxs = torch.arange(a_rep.shape[0])
+        i_idxs = a_idxs = a_idxs.max()
+        x_dict['a'] = torch.cat((a_rep, i_rep),0)
+
+        # create new edge index dict for qa to be added in at end
+        new_eid = {}
+
+        ## Q - mods
+        # get batch dict
+        # like [0,0...,0,1,1,...1,...32,32...32] where each batch idx repeats 6 times for the 6 questions
+        bs = q_rep.shape[0] // NUM_QS
+        bd_q = torch.arange(bs)[:,None].expand(-1,NUM_QS).reshape(-1)
+        bd_q = bd_q.to(device)
+
+        for mod in mods:
+            new_eid[mod, f'{mod}_q', 'q'] = bds_to_conns(bd_q, batch_dict[mod])
+            
+            new_eid['q', f'q_{mod}', mod] = bds_to_conns(bd_q, batch_dict[mod]).flip(dims=[0])
+
+        ## A / I - mods
+        bd_a = torch.arange(bs)[:,None].expand(-1,NUM_QS*NUM_A_COMBS).reshape(-1)
+        bd_a = torch.cat((bd_a, bd_a), 0) # for i
+        bd_a = bd_a.to(device)
+        ai_split = bs*NUM_A_COMBS*NUM_QS # partition idx between a and i
+
+        for mod in mods:
+            new_eid[mod, f'{mod}_a', 'a'] = bds_to_conns(bd_a, batch_dict[mod])
+            
+            new_eid['a', f'a_{mod}', mod] = bds_to_conns(bd_a, batch_dict[mod]).flip(dims=[0])
+
+        ## Q-A
+        q_idxs = torch.arange(NUM_QS*bs)[:,None].expand(-1, NUM_A_COMBS).reshape(-1)
+        q_idxs = torch.cat((q_idxs, q_idxs))
+        a_idxs = torch.arange(NUM_QS*bs*NUM_A_COMBS*2) # i_idxs = a_idxs
+
+        new_eid['q', 'q_a', 'a'] = torch.vstack([q_idxs, a_idxs])
+        new_eid['a', 'a_q', 'q'] = torch.vstack([a_idxs, q_idxs])
+
+        # new_eid['a', 'ai', 'a'] = torch.vstack([a_idxs[:ai_split], a_idxs[ai_split:]])
+        # new_eid['a', 'ai', 'a'] = torch.vstack([a_idxs[ai_split:], a_idxs[:ai_split]])
+        
+        q_idxs_unexpanded = torch.arange(NUM_QS*bs)
+        new_eid['q', 'q_q', 'q'] = torch.vstack([q_idxs_unexpanded, q_idxs_unexpanded])
+        new_eid['a', 'a_a', 'a'] = torch.vstack([a_idxs, a_idxs])
+
+        # assert subsets_eq(lkeys(new_eid), qa_conns)
+
+        edge_index_dict = {
+            **edge_index_dict,
+            **new_eid,
+        }
+        # move all to cuda
+        for k,v in edge_index_dict.items():
+            if v.device.type=='cpu':
+                edge_index_dict[k] = edge_index_dict[k].to(device)
 
         for conv in self.convs:
-            # x_dict = conv(x_dict, edge_index_dict)
-            x_dict, _ = conv(x_dict, edge_index_dict, return_attention_weights_dict={elt: True for elt in all_connections})
+            x_dict, _ = conv(x_dict , edge_index_dict, return_attention_weights_dict={elt: True for elt in qa_conns+all_connections})
             x_dict = {key: x[0].relu() for key, x in x_dict.items()}
-            a = 2
-        # readout: avg nodes (no pruning yet!)
-        x = torch.cat([v for v in x_dict.values()], axis=0)
-        batch_dicts = torch.cat([v for v in batch_dict.values()], axis=0)
-        x = scatter_mean(x,batch_dicts, dim=0)
-        return x
 
+        # readout: avg nodes (no pruning yet!)
+        q_out = x_dict['q'].reshape(-1,NUM_QS,gc['graph_conv_in_dim'])[:,:,None,:].expand(-1,-1,NUM_A_COMBS,-1).reshape(-1, gc['graph_conv_in_dim']) # (bs*6*12, 64)
+        a_out = x_dict['a'][:ai_split] # (bs*6*12, 64)
+        i_out = x_dict['a'][ai_split:] # (bs*6*12, 64)
+
+        return q_out, a_out, i_out
 
 class GraphQA_SocialModel(torch.nn.Module):
     def __init__(self):
         super().__init__()
         
-        self.q_lstm = mylstm.MyLSTM(768,50)
-        self.a_lstm = mylstm.MyLSTM(768,50)
+        self.q_lstm = mylstm.MyLSTM(768,gc['graph_conv_in_dim'])
+        self.a_lstm = mylstm.MyLSTM(768,gc['graph_conv_in_dim'])
 
         self.judge = nn.Sequential(OrderedDict([
-            ('fc0',   nn.Linear(214,25)),
+            ('fc0',   nn.Linear(3*gc['graph_conv_in_dim'],25)),
             ('sig0', nn.Sigmoid()),
             ('fc1',   nn.Linear(25,1)),
             ('sig1', nn.Sigmoid())
@@ -711,70 +865,27 @@ class GraphQA_SocialModel(torch.nn.Module):
         a_rep=self.a_lstm.step(to_pytorch(flatten_qail(a)))[1][0][0,:,:]
         i_rep=self.a_lstm.step(to_pytorch(flatten_qail(inc)))[1][0][0,:,:]
 
-        hetero_out = self.hetero_gnn(batch.x_dict, batch.edge_index_dict, batch.batch_dict, q_rep, a_rep, i_rep)
-        hetero_reshaped = hetero_out[:,None,:].expand(-1, 12*6, -1).reshape(-1, gc['graph_conv_in_dim'])
-        hetero_normed = (hetero_reshaped - hetero_reshaped.mean(dim=-1)[:,None]) / (hetero_reshaped.std(dim=-1)[:,None] + 1e-6)
 
-        correct=self.judge(torch.cat((q_rep,a_rep,i_rep,hetero_normed),1))
-        incorrect=self.judge(torch.cat((q_rep,i_rep,a_rep,hetero_normed),1))
+        # randomize which index is passed in - breaks model
 
+        # with torch.no_grad():
+        #     idx = int(np.random.random()>.5)
+
+        # if idx == 0: # pass in a_rep as a_rep
+        #     q_out, a_out, i_out = self.hetero_gnn(batch.x_dict, batch.edge_index_dict, batch.batch_dict, q_rep, a_rep, i_rep)
+        # else:
+        #     q_out, i_out, a_out = self.hetero_gnn(batch.x_dict, batch.edge_index_dict, batch.batch_dict, q_rep, i_rep, a_rep)
+
+        q_out, a_out, i_out = self.hetero_gnn(batch.x_dict, batch.edge_index_dict, batch.batch_dict, q_rep, a_rep, i_rep)
+
+        # hetero_normed = (hetero_reshaped - hetero_reshaped.mean(dim=-1)[:,None]) / (hetero_reshaped.std(dim=-1)[:,None] + 1e-6)
+
+        # correct=self.judge(torch.cat((q_out, a_out, i_out),1))
+        # incorrect=self.judge(torch.cat((q_out,i_out,a_out),1))
+
+        correct = self.judge(torch.cat((q_out, a_out,i_out),1))
+        incorrect = self.judge(torch.cat((q_out, i_out,a_out),1))
         return correct, incorrect
-
-
-class SocialModel(torch.nn.Module):
-    def __init__(self):
-        super().__init__()
-        
-        self.q_lstm=mylstm.MyLSTM(768,50)
-        self.a_lstm=mylstm.MyLSTM(768,50)
-        
-        self.judge = nn.Sequential(OrderedDict([
-            ('fc0',   nn.Linear(214,25)),
-            ('drop_1', nn.Dropout(p=gc['drop_1'])),
-            ('sig0', nn.Sigmoid()),
-            ('fc1',   nn.Linear(25,1)),
-            ('drop_2', nn.Dropout(p=gc['drop_2'])),
-            ('sig1', nn.Sigmoid())
-        ]))
-
-        self.hetero_gnn = HeteroGNN(gc['graph_conv_in_dim'], 1, gc['num_gat_layers'])
-
-    def forward(self, batch):
-        hetero_out = self.hetero_gnn(batch.x_dict, batch.edge_index_dict, batch.batch_dict)
-        hetero_reshaped = hetero_out[:,None,:].expand(-1, 12*6, -1).reshape(-1, gc['graph_conv_in_dim'])
-        hetero_normed = (hetero_reshaped - hetero_reshaped.mean(dim=-1)[:,None]) / (hetero_reshaped.std(dim=-1)[:,None] + 1e-6)
-
-        q = batch.q.reshape(-1, 6, *batch.q.shape[1:])
-        a = batch.a.reshape(-1, 6, *batch.a.shape[1:])
-        inc = batch.inc.reshape(-1, 6, *batch.inc.shape[1:])
-        
-        q_rep=self.q_lstm.step(to_pytorch(flatten_qail(q)))[1][0][0,:,:]
-        a_rep=self.a_lstm.step(to_pytorch(flatten_qail(a)))[1][0][0,:,:]
-        i_rep=self.a_lstm.step(to_pytorch(flatten_qail(inc)))[1][0][0,:,:]
-
-        correct=self.judge(torch.cat((q_rep,a_rep,i_rep,hetero_normed),1))
-        incorrect=self.judge(torch.cat((q_rep,i_rep,a_rep,hetero_normed),1))
-
-        return correct, incorrect
-
-class MosiModel(torch.nn.Module):
-    def __init__(self, hidden_channels, out_channels, num_layers):
-        super().__init__()
-        self.hetero_gnn = HeteroGNN(hidden_channels, out_channels, num_layers)
-
-        self.finalW = nn.Sequential(
-            Linear(-1, hidden_channels // 4),
-            nn.ReLU(),
-            nn.Dropout(p=gc['drop_1']),
-            Linear(hidden_channels // 4, hidden_channels // 4),
-            nn.Dropout(p=gc['drop_2']),
-            nn.ReLU(),
-            Linear(hidden_channels // 4, out_channels),
-        )
-
-    def forward(self, batch):
-        hetero_out = self.hetero_gnn(batch.x_dict, batch.edge_index_dict, batch.batch_dict)
-        return self.finalW(hetero_out).squeeze(axis=-1)
 
 def train_model_social(optimizer, use_gnn=True, exclude_vision=False, exclude_audio=False, exclude_text=False, average_mha=False, num_gat_layers=1, lr_scheduler=None, reduce_on_plateau_lr_scheduler_patience=None, reduce_on_plateau_lr_scheduler_threshold=None, multi_step_lr_scheduler_milestones=None, exponential_lr_scheduler_gamma=None, use_pe=False, use_prune=False):
     print('Social path!')
@@ -856,10 +967,14 @@ def train_model_social(optimizer, use_gnn=True, exclude_vision=False, exclude_au
             losses.append(loss.cpu().detach().numpy())
             accs.append(calc_accuracy(correct,incorrect))
 
+        print('Train acc:', np.mean(accs))
+        print('Train loss:', np.mean(losses))
+
         _accs=[]
+        _losses = []
         ds_size=len(dek)
         model.eval()
-        with torch.no_grad():  # Initialize lazy modules.
+        with torch.no_grad():
             for batch in dev_loader:
                 batch = batch.to(device)
                 correct, incorrect = model(batch)
@@ -870,10 +985,17 @@ def train_model_social(optimizer, use_gnn=True, exclude_vision=False, exclude_au
                 acc = calc_accuracy(correct,incorrect)
                 _accs.append(acc)
 
-                if acc > valid_best['acc']:
-                    valid_best['acc'] = acc
+                loss=(nn.MSELoss()(correct.mean(),correct_mean)+nn.MSELoss()(incorrect.mean(),incorrect_mean)).cpu().detach().numpy()
+                _losses.append(loss)
                 
-            print ("Dev Acc:",numpy.array(_accs,dtype="float32").mean())
+            dev_acc = numpy.array(_accs,dtype="float32").mean()
+            print ("Dev Acc:", dev_acc)
+            print('Dev loss:', np.mean(_losses))
+            if dev_acc > valid_best['acc']:
+                valid_best['acc'] = dev_acc
+
+    print('best dev acc:', valid_best)
+    print('Model parameters:', count_params(model))
     return {k: float(v) for k,v in valid_best.items()}
 
 def train_model(optimizer, use_gnn=True, exclude_vision=False, exclude_audio=False, exclude_text=False, average_mha=False, num_gat_layers=1, lr_scheduler=None, reduce_on_plateau_lr_scheduler_patience=None, reduce_on_plateau_lr_scheduler_threshold=None, multi_step_lr_scheduler_milestones=None, exponential_lr_scheduler_gamma=None, use_pe=False, use_prune=False):
@@ -925,6 +1047,8 @@ def train_model(optimizer, use_gnn=True, exclude_vision=False, exclude_audio=Fal
         valid_loss, y_trues_valid, y_preds_valid = test(valid_loader, model, scheduler, valid=True)
         valid_res = eval_fn('valid', y_preds_valid, y_trues_valid)
         
+        if epoch == 10:
+            a=2
         test_loss, y_trues_test, y_preds_test = test(test_loader, model, scheduler, valid=False)
         test_res = eval_fn('test', y_preds_test, y_trues_test)
 

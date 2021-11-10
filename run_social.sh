@@ -1,0 +1,31 @@
+#!/bin/bash
+
+python main.py \
+--optimizer adamw \
+--batch_size 32 \
+--global_lr 0.001 \
+--average_mha 1 \
+--num_gat_layers 6 \
+--graph_conv_in_dim 64 \
+--gat_conv_num_heads 2 \
+--drop_het 0.5 \
+--lr_scheduler reduce_on_plateau \
+--reduce_on_plateau_lr_scheduler_patience 5 \
+--reduce_on_plateau_lr_scheduler_threshold 0.02 \
+--use_pe 1 \
+--use_prune 1 \
+--use_ffn 1 \
+--remove_isolated 1 \
+--prune_keep_p 0.8 \
+--loss_type sl1 \
+--use_conv1d 0 \
+--use_loss_norm 1 \
+--graph_qa 0 \
+--time_aware_edges 1 \
+--seed 0 \
+--use_all_to_all 0 \
+--epochs 20 \
+--useGNN 1 \
+--task social_unaligned \
+--dataroot /work/awilf/MTAG/data \
+--log_dir deb \
