@@ -10,3 +10,9 @@ deployed
 *.pk
 *.pyc
 *.ipynb
+
+results
+output
+CMU-Multimodal-SDK
+*.sif
+.*.pkl

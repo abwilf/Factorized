@@ -45,7 +45,7 @@ defaults = [
     ("--remove_isolated", int, 0),
     ("--use_conv1d", int, 0),
     ("--hidden_dim", int, 50),
-    ("--graph_qa", int, 1),
+    ("--graph_qa", int, 0),
 
     ("--use_loss_norm", int, 0),
     ("--use_all_to_all", int, 0),
@@ -61,6 +61,10 @@ defaults = [
     ("--zero_out_video", int, 0),
     ("--zero_out_text",  int, 0),
     ("--zero_out_audio", int, 0),
+    ("--flip_test_order", int, 0),
+    ("--flip_train_order", int, 0),
+    ("--use_ai_conn", int, 0),
+    ("--out_dir", str, '/work/awilf/MTAG/results/hash1'),
 
         # Other settings, these are likely to be fixed all the time
     ("--task", str, 'mosei'),

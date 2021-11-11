@@ -805,8 +805,8 @@ class GraphQA_HeteroGNN(torch.nn.Module):
         new_eid['q', 'q_a', 'a'] = torch.vstack([q_idxs, a_idxs])
         new_eid['a', 'a_q', 'q'] = torch.vstack([a_idxs, q_idxs])
 
-        # new_eid['a', 'ai', 'a'] = torch.vstack([a_idxs[:ai_split], a_idxs[ai_split:]])
-        # new_eid['a', 'ai', 'a'] = torch.vstack([a_idxs[ai_split:], a_idxs[:ai_split]])
+        new_eid['a', 'ai', 'a'] = torch.vstack([a_idxs[:ai_split], a_idxs[ai_split:]])
+        new_eid['a', 'ai', 'a'] = torch.vstack([a_idxs[ai_split:], a_idxs[:ai_split]])
         
         q_idxs_unexpanded = torch.arange(NUM_QS*bs)
         new_eid['q', 'q_q', 'q'] = torch.vstack([q_idxs_unexpanded, q_idxs_unexpanded])
@@ -950,7 +950,20 @@ def train_model_social(optimizer, use_gnn=True, exclude_vision=False, exclude_au
             if cont:
                 continue
             
-            correct, incorrect = model(batch)
+            if gc['flip_train_order']:
+                if np.random.random() < .5: # flip order of answer and incorrect in testing to make sure model isn't learning something fishy
+                    a = batch.a
+                    inc = batch.inc
+
+                    batch.inc = a
+                    batch.a = inc
+
+                    incorrect, correct = model(batch)
+
+                else:
+                    correct, incorrect = model(batch)
+            else:
+                correct, incorrect = model(batch)
 
             correct_mean=Variable(torch.Tensor(numpy.array([1.0])),requires_grad=False).cuda()
             incorrect_mean=Variable(torch.Tensor(numpy.array([0.])),requires_grad=False).cuda()
@@ -977,7 +990,21 @@ def train_model_social(optimizer, use_gnn=True, exclude_vision=False, exclude_au
         with torch.no_grad():
             for batch in dev_loader:
                 batch = batch.to(device)
-                correct, incorrect = model(batch)
+                
+                if gc['flip_test_order']:
+                    if np.random.random() < .5: # flip order of answer and incorrect in testing to make sure model isn't learning something fishy
+                        a = batch.a
+                        inc = batch.inc
+
+                        batch.inc = a
+                        batch.a = inc
+
+                        incorrect, correct = model(batch)
+
+                    else:
+                        correct, incorrect = model(batch)
+                else:
+                    correct, incorrect = model(batch)
                 
                 correct_mean=Variable(torch.Tensor(numpy.array([1.0])),requires_grad=False).cuda()
                 incorrect_mean=Variable(torch.Tensor(numpy.array([0.])),requires_grad=False).cuda()
