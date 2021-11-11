@@ -805,8 +805,9 @@ class GraphQA_HeteroGNN(torch.nn.Module):
         new_eid['q', 'q_a', 'a'] = torch.vstack([q_idxs, a_idxs])
         new_eid['a', 'a_q', 'q'] = torch.vstack([a_idxs, q_idxs])
 
-        new_eid['a', 'ai', 'a'] = torch.vstack([a_idxs[:ai_split], a_idxs[ai_split:]])
-        new_eid['a', 'ai', 'a'] = torch.vstack([a_idxs[ai_split:], a_idxs[:ai_split]])
+        if gc['use_ai_conn']:
+            new_eid['a', 'ai', 'a'] = torch.vstack([a_idxs[:ai_split], a_idxs[ai_split:]])
+            new_eid['a', 'ai', 'a'] = torch.vstack([a_idxs[ai_split:], a_idxs[:ai_split]])
         
         q_idxs_unexpanded = torch.arange(NUM_QS*bs)
         new_eid['q', 'q_q', 'q'] = torch.vstack([q_idxs_unexpanded, q_idxs_unexpanded])
@@ -1147,10 +1148,10 @@ if __name__ == "__main__":
         # best_results = {'a': 2}
 
         elapsed_time = time.time() - start_time
-        out_dir = "output/"
+        out_dir = join(gc['out_dir'])
         mkdirp(out_dir)
 
-        save_json(join(out_dir, 'results.txt'), best_results)
+        save_json(join(out_dir, 'results.json'), best_results)
     
     else:
         assert gc['resume_pt'] is not None
