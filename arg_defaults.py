@@ -65,6 +65,7 @@ defaults = [
     ("--flip_train_order", int, 0),
     ("--use_ai_conn", int, 0),
     ("--out_dir", str, '/work/awilf/MTAG/results/hash1'),
+    ("--trials", int, 1),
 
         # Other settings, these are likely to be fixed all the time
     ("--task", str, 'mosei'),

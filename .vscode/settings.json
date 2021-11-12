@@ -1,0 +1,5 @@
+{
+    "python.pythonPath": "/work/awilf/anaconda3/envs/MTAG/bin/python",
+    "jupyter.jupyterServerType": "local",
+    "debug.console.historySuggestions": false
+}

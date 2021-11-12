@@ -23,9 +23,8 @@ hp = {
     'use_loss_norm': [1],
     'graph_qa': [1],
     'time_aware_edges': [1],
-    'seed': [0,1,3],
     'use_all_to_all': [0],
-    'epochs': [20],
+    'epochs': [30],
     'useGNN': [1],
     # 'zero_out_video': [0,1],
     # 'zero_out_text': [0,1],
@@ -37,8 +36,6 @@ hp = {
     'log_dir': ['/work/awilf/MTAG/debug'],
     'out_dir': ['/work/awilf/MTAG/results/hash1'],
 
-    'flip_test_order': [0],
-    'flip_train_order': [0],
-    'use_ai_conn': [0],
-
+    'use_ai_conn': [1],
+    'trials': [3],
 }

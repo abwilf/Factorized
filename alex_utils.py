@@ -301,6 +301,11 @@ class NumpyEncoder(json.JSONEncoder):
 
 def save_json(file_stub, obj):
     filename = file_stub
+    for k,v in obj.items():
+        if isinstance(v, list):
+            obj[k] = np.array(v)
+            if obj[k].dtype==np.float32:
+                obj[k] = obj[k].astype(np.float64)
     with open(filename, 'w') as f:
         json.dump(obj, f, cls=NumpyEncoder, indent=4)
 

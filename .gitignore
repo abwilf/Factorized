@@ -16,3 +16,5 @@ output
 CMU-Multimodal-SDK
 *.sif
 .*.pkl
+credentials.json
+token.json
