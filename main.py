@@ -764,7 +764,18 @@ class GraphQA_HeteroGNN(torch.nn.Module):
             assert (idxs==(idxs.sort().values)).all()
             _, counts = torch.unique(idxs, return_counts=True)
             x_dict[m] = self.pes[m](v, counts)
-        
+
+        # NUM_QS = 2
+        # NUM_A_COMBS = 6
+
+        # bdv = torch.Tensor([0,0,0,0,1,1])
+        # batch_dict['v'] = bdv.to(device)
+        # x_dict['v'] = torch.ones(6,10)
+        # q_rep = torch.ones(2,2,10).reshape(-1,10)
+        # a_rep = torch.ones(2,2,6,10).reshape(-1,10)
+        # i_rep = torch.ones(2,2,6,10).reshape(-1,10)
+        # a_tot = torch.cat((a_rep,i_rep),dim=0)
+
         # add qa to x_dict
         x_dict['q'] = q_rep
         a_idxs = torch.arange(a_rep.shape[0])
@@ -781,6 +792,7 @@ class GraphQA_HeteroGNN(torch.nn.Module):
         bd_q = torch.arange(bs)[:,None].expand(-1,NUM_QS).reshape(-1)
         bd_q = bd_q.to(device)
 
+        # mods = ['v']
         for mod in mods:
             new_eid[mod, f'{mod}_q', 'q'] = bds_to_conns(bd_q, batch_dict[mod])
             
@@ -806,8 +818,7 @@ class GraphQA_HeteroGNN(torch.nn.Module):
         new_eid['a', 'a_q', 'q'] = torch.vstack([a_idxs, q_idxs])
 
         if gc['use_ai_conn']:
-            new_eid['a', 'ai', 'a'] = torch.vstack([a_idxs[:ai_split], a_idxs[ai_split:]])
-            new_eid['a', 'ai', 'a'] = torch.vstack([a_idxs[ai_split:], a_idxs[:ai_split]])
+            new_eid['a', 'ai', 'a'] = torch.cat((torch.vstack([a_idxs[:ai_split], a_idxs[ai_split:]]), torch.vstack([a_idxs[ai_split:], a_idxs[:ai_split]])), dim=-1)
         
         q_idxs_unexpanded = torch.arange(NUM_QS*bs)
         new_eid['q', 'q_q', 'q'] = torch.vstack([q_idxs_unexpanded, q_idxs_unexpanded])
@@ -844,8 +855,10 @@ class GraphQA_SocialModel(torch.nn.Module):
 
         self.judge = nn.Sequential(OrderedDict([
             ('fc0',   nn.Linear(3*gc['graph_conv_in_dim'],25)),
+            ('drop_1', nn.Dropout(p=gc['drop_1'])),
             ('sig0', nn.Sigmoid()),
             ('fc1',   nn.Linear(25,1)),
+            ('drop_2', nn.Dropout(p=gc['drop_2'])),
             ('sig1', nn.Sigmoid())
         ]))
 
