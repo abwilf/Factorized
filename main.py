@@ -772,7 +772,7 @@ class GraphQA_HeteroGNN(torch.nn.Module):
         else:
             assert False, key+' not an accepted key!'
 
-    def forward(self, x_dict, edge_index_dict, batch_dict, q_rep, a_rep):
+    def forward(self, x_dict, edge_index_dict, batch_dict, q_rep, a_rep, i_rep, block):
         # linearly project modalities
         x_dict = { key: self.map_x(x, key) for key, x in x_dict.items() }
         
@@ -795,50 +795,81 @@ class GraphQA_HeteroGNN(torch.nn.Module):
         # a_rep = torch.cat((a_rep,i_rep),dim=0)
         # mods = ['v']
         ##
-
-        # add qa to x_dict
+        
         x_dict['q'] = q_rep
-        a_idxs = torch.arange(a_rep.shape[0])
-        x_dict['a'] = a_rep
-
-        # create new edge index dict for qa to be added in at end
         new_eid = {}
-
+        bs = q_rep.shape[0] // NUM_QS
+        a_idxs = torch.arange(NUM_QS*bs*NUM_A_COMBS*2)
+        
         ## Q - mods
         # get batch dict
         # like [0,0...,0,1,1,...1,...32,32...32] where each batch idx repeats 6 times for the 6 questions
-        bs = q_rep.shape[0] // NUM_QS
         bd_q = torch.arange(bs)[:,None].expand(-1,NUM_QS).reshape(-1)
         bd_q = bd_q.to(device)
 
         for mod in mods:
             new_eid[mod, f'{mod}_q', 'q'] = bds_to_conns(bd_q, batch_dict[mod])
-            
             new_eid['q', f'q_{mod}', mod] = bds_to_conns(bd_q, batch_dict[mod]).flip(dims=[0])
 
-        ## A / I - mods
-        bd_a = torch.arange(bs)[:,None].expand(-1,NUM_QS*NUM_A_COMBS*2).reshape(-1)
-        bd_a = bd_a.to(device)
+        # create new edge index dict for qa to be added in at end
+        ## BLOCK
+        if block:
+            x_dict['a'] = torch.cat((a_rep, i_rep),0)
+            ## A / I - mods
+            bd_a = torch.arange(bs)[:,None].expand(-1,NUM_QS*NUM_A_COMBS).reshape(-1)
+            bd_a = torch.cat((bd_a, bd_a), 0) # for i
+            bd_a = bd_a.to(device)
+            ai_split = bs*NUM_A_COMBS*NUM_QS # partition idx between a and i
 
-        for mod in mods:
-            new_eid[mod, f'{mod}_a', 'a'] = bds_to_conns(bd_a, batch_dict[mod])
+            if gc['use_mod_conn']:
+                for mod in mods:
+                    new_eid[mod, f'{mod}_a', 'a'] = bds_to_conns(bd_a, batch_dict[mod])
+                    new_eid['a', f'a_{mod}', mod] = bds_to_conns(bd_a, batch_dict[mod]).flip(dims=[0])
 
-            new_eid['a', f'a_{mod}', mod] = bds_to_conns(bd_a, batch_dict[mod]).flip(dims=[0])
+            ## Q-A
+            q_idxs = torch.arange(NUM_QS*bs)[:,None].expand(-1, NUM_A_COMBS).reshape(-1)
+            q_idxs = torch.cat((q_idxs, q_idxs))
 
-        ## Q-A
-        bd_qq = torch.arange(NUM_QS*bs) # treat q as "batch dict of questions", where q0 comes from question 0
-        bd_aq = torch.arange(NUM_QS*bs)[:,None].expand(-1, NUM_A_COMBS*2).reshape(-1) # treat bd_qa as "batch dict of questions", where idxs 0:NUM_A_COMBS*2 come from q1, NUM_A_COMBS*2:2*NUM_A_COMBS*2 come from q2...etc
-        new_eid['q', 'q_a', 'a'] = bds_to_conns(bd_aq, bd_qq)
-        new_eid['a', 'a_q', 'q'] = bds_to_conns(bd_aq, bd_qq).flip(dims=[0])
-
-        if gc['use_ai_conn']:
-            new_eid['a', 'ai', 'a'] = torch.cat( (torch.arange(a_rep.shape[0]).reshape(-1,2).t(), torch.arange(a_rep.shape[0]).reshape(-1,2).t().flip(dims=[0])), dim=-1)
+            if gc['use_qa_conn']:
+                new_eid['q', 'q_a', 'a'] = torch.vstack([q_idxs, a_idxs])
+                new_eid['a', 'a_q', 'q'] = torch.vstack([a_idxs, q_idxs])
             
-        q_idxs_unexpanded = torch.arange(NUM_QS*bs)
-        new_eid['q', 'q_q', 'q'] = torch.vstack([q_idxs_unexpanded, q_idxs_unexpanded])
-        new_eid['a', 'a_a', 'a'] = torch.vstack([a_idxs, a_idxs])
+            if gc['use_ai_conn']:
+                new_eid['a', 'ai', 'a'] = torch.cat((torch.vstack([a_idxs[:ai_split], a_idxs[ai_split:]]), torch.vstack([a_idxs[ai_split:], a_idxs[:ai_split]])), dim=-1)
+            
+            if gc['use_qa_self_conn']:
+                q_idxs_unexpanded = torch.arange(NUM_QS*bs)
+                new_eid['q', 'q_q', 'q'] = torch.vstack([q_idxs_unexpanded, q_idxs_unexpanded])
+                new_eid['a', 'a_a', 'a'] = torch.vstack([a_idxs, a_idxs])
 
-        # assert subsets_eq(lkeys(new_eid), qa_conns)
+        ##
+
+        ## INTERLEAVE
+        else:
+            x_dict['a'] = a_rep
+            ## A - mods
+            bd_a = torch.arange(bs)[:,None].expand(-1,NUM_QS*NUM_A_COMBS*2).reshape(-1)
+            bd_a = bd_a.to(device)
+            if gc['use_mod_conn']:
+                for mod in mods:
+                    new_eid[mod, f'{mod}_a', 'a'] = bds_to_conns(bd_a, batch_dict[mod])
+                    new_eid['a', f'a_{mod}', mod] = bds_to_conns(bd_a, batch_dict[mod]).flip(dims=[0])
+
+            ## Q-A
+            bd_qq = torch.arange(NUM_QS*bs) # treat q as "batch dict of questions", where q0 comes from question 0
+            bd_aq = torch.arange(NUM_QS*bs)[:,None].expand(-1, NUM_A_COMBS*2).reshape(-1) # treat bd_qa as "batch dict of questions", where idxs 0:NUM_A_COMBS*2 come from q1, NUM_A_COMBS*2:2*NUM_A_COMBS*2 come from q2...etc
+            if gc['use_qa_conn']:
+                new_eid['q', 'q_a', 'a'] = bds_to_conns(bd_aq, bd_qq)
+                new_eid['a', 'a_q', 'q'] = bds_to_conns(bd_aq, bd_qq).flip(dims=[0])
+
+            if gc['use_ai_conn']:
+                new_eid['a', 'ai', 'a'] = torch.cat( (torch.arange(a_rep.shape[0]).reshape(-1,2).t(), torch.arange(a_rep.shape[0]).reshape(-1,2).t().flip(dims=[0])), dim=-1)
+                
+            if gc['use_qa_self_conn']:
+                q_idxs_unexpanded = torch.arange(NUM_QS*bs)
+                new_eid['q', 'q_q', 'q'] = torch.vstack([q_idxs_unexpanded, q_idxs_unexpanded])
+                new_eid['a', 'a_a', 'a'] = torch.vstack([a_idxs, a_idxs])
+
 
         edge_index_dict = {
             **edge_index_dict,
@@ -855,9 +886,16 @@ class GraphQA_HeteroGNN(torch.nn.Module):
 
         # readout: avg nodes (no pruning yet!)
         q_out = x_dict['q'].reshape(-1,NUM_QS,gc['graph_conv_in_dim'])[:,:,None,:].expand(-1,-1,NUM_A_COMBS,-1).reshape(-1, gc['graph_conv_in_dim']) # (bs*6*12, 64)
-        a_out = x_dict['a']
+        
+        if block:
+            ai_split = bs*NUM_A_COMBS*NUM_QS # partition idx between a and i
+            a_out = x_dict['a'][:ai_split] # (bs*6*12, 64)
+            i_out = x_dict['a'][ai_split:] # (bs*6*12, 64)
+            return q_out, a_out, i_out
 
-        return q_out, a_out
+        else:
+            a_out = x_dict['a']
+            return q_out, a_out
 
 class GraphQA_SocialModel(torch.nn.Module):
     def __init__(self):
@@ -868,46 +906,46 @@ class GraphQA_SocialModel(torch.nn.Module):
 
         self.judge = nn.Sequential(OrderedDict([
             ('fc0',   nn.Linear(3*gc['graph_conv_in_dim'],25)),
+            ('drop_1', nn.Dropout(p=gc['drop_1'])),
             ('sig0', nn.Sigmoid()),
             ('fc1',   nn.Linear(25,1)),
+            ('drop_2', nn.Dropout(p=gc['drop_2'])),
             ('sig1', nn.Sigmoid())
         ]))
 
         self.hetero_gnn = GraphQA_HeteroGNN(gc['graph_conv_in_dim'], 1, gc['num_gat_layers'])
 
-    def forward(self, batch, ai_rep, a_idxs, i_idxs):
-        if gc['graph_qa']:
-            q = batch.q[:,0,0,:,:]
-            q_rep=self.q_lstm.step(q.transpose(1,0))[1][0][0,:,:]
+    def forward_block(self, batch):
+        q = batch.q[:,0,0,:,:]
+        q_rep=self.q_lstm.step(q.transpose(1,0))[1][0][0,:,:]
 
-        else:
-            q = batch.q.reshape(-1, 6, *batch.q.shape[1:])
-            q_rep=self.q_lstm.step(to_pytorch(flatten_qail(q)))[1][0][0,:,:]
         
+        a = batch.a.reshape(-1, 6, *batch.a.shape[1:])
+        inc = batch.inc.reshape(-1, 6, *batch.inc.shape[1:])
+        
+        a_rep=self.a_lstm.step(to_pytorch(flatten_qail(a)))[1][0][0,:,:]
+        i_rep=self.a_lstm.step(to_pytorch(flatten_qail(inc)))[1][0][0,:,:]
+
+        q_out, a_out, i_out = self.hetero_gnn(batch.x_dict, batch.edge_index_dict, batch.batch_dict, q_rep, a_rep, i_rep, block=True)
+
+        correct = self.judge(torch.cat((q_out, a_out,i_out),1))
+        incorrect = self.judge(torch.cat((q_out, i_out,a_out),1))
+        return correct, incorrect
+
+    def forward_inter(self, batch, ai_rep, a_idxs, i_idxs):
+        q = batch.q[:,0,0,:,:]
+        q_rep=self.q_lstm.step(q.transpose(1,0))[1][0][0,:,:]
+
         a_rep=self.a_lstm.step(ai_rep)[1][0][0,:,:]
 
-        # randomize which index is passed in - breaks model
-
-        # with torch.no_grad():
-        #     idx = int(np.random.random()>.5)
-
-        # if idx == 0: # pass in a_rep as a_rep
-        #     q_out, a_out, i_out = self.hetero_gnn(batch.x_dict, batch.edge_index_dict, batch.batch_dict, q_rep, a_rep, i_rep)
-        # else:
-        #     q_out, i_out, a_out = self.hetero_gnn(batch.x_dict, batch.edge_index_dict, batch.batch_dict, q_rep, i_rep, a_rep)
-
-        q_out, a_out = self.hetero_gnn(batch.x_dict, batch.edge_index_dict, batch.batch_dict, q_rep, a_rep)
-
+        q_out, a_out = self.hetero_gnn(batch.x_dict, batch.edge_index_dict, batch.batch_dict, q_rep, a_rep, i_rep=None, block=False)
         i_out = a_out[i_idxs]
         a_out = a_out[a_idxs]
-        # hetero_normed = (hetero_reshaped - hetero_reshaped.mean(dim=-1)[:,None]) / (hetero_reshaped.std(dim=-1)[:,None] + 1e-6)
-
-        # correct=self.judge(torch.cat((q_out, a_out, i_out),1))
-        # incorrect=self.judge(torch.cat((q_out,i_out,a_out),1))
 
         correct = self.judge(torch.cat((q_out, a_out, i_out),1))
         incorrect = self.judge(torch.cat((q_out, i_out, a_out),1))
         return correct, incorrect
+        
 
 def train_model_social(optimizer, use_gnn=True, exclude_vision=False, exclude_audio=False, exclude_text=False, average_mha=False, num_gat_layers=1, lr_scheduler=None, reduce_on_plateau_lr_scheduler_patience=None, reduce_on_plateau_lr_scheduler_threshold=None, multi_step_lr_scheduler_milestones=None, exponential_lr_scheduler_gamma=None, use_pe=False, use_prune=False):
     print('Social path!')
@@ -958,15 +996,22 @@ def train_model_social(optimizer, use_gnn=True, exclude_vision=False, exclude_au
         'val_losses': [],
     }
 
-    for i in range(gc['epochs']):
-        print ("Epoch %d"%i)
-        ds_size=len(trk)
-        model.train()
-        train_losses, train_accs = [],[]
-
-        for batch_i, batch in enumerate(tqdm(train_loader)):
-            batch = batch.to(device)
+    def get_model_out(batch, block, model, split):
+        if not gc['graph_qa']:
+            return model(batch)
+        if block:
+            if gc[f'flip_{split}_order']:
+                if np.random.random() < .5: # flip order of answer and incorrect in testing to make sure model isn't learning something fishy
+                    batch.a, batch.inc = batch.inc, batch.a
+                    incorrect, correct = model.forward_block(batch)
+                else:
+                    correct, incorrect = model.forward_block(batch)
+            else:
+                correct, incorrect = model.forward_block(batch)
             
+            return correct, incorrect
+            
+        else:
             a = batch.a.reshape(-1, 6, *batch.a.shape[1:])
             inc = batch.inc.reshape(-1, 6, *batch.inc.shape[1:])
             
@@ -978,10 +1023,21 @@ def train_model_social(optimizer, use_gnn=True, exclude_vision=False, exclude_au
             interleaved, a_idxs, i_idxs = interleave(a,inc)
             interleaved = interleaved.transpose(1,0)
             ai_rep = interleaved
+            return model.forward_inter(batch, ai_rep, a_idxs, i_idxs)
+
+    for i in range(gc['epochs']):
+        print ("Epoch %d"%i)
+        ds_size=len(trk)
+        model.train()
+        train_losses, train_accs = [],[]
+
+        train_block = gc['train_block']
+        for batch_i, batch in enumerate(tqdm(train_loader)):
+            batch = batch.to(device)
 
             if batch_i == 0:
                 with torch.no_grad():  # Initialize lazy modules.
-                    model(batch, ai_rep, a_idxs, i_idxs)
+                    correct, incorrect = get_model_out(batch, train_block, model, 'train')
 
             cont = False
             for mod in mods:
@@ -991,7 +1047,7 @@ def train_model_social(optimizer, use_gnn=True, exclude_vision=False, exclude_au
             if cont:
                 continue
             
-            correct, incorrect = model(batch, ai_rep, a_idxs, i_idxs)
+            correct, incorrect = get_model_out(batch, train_block, model, 'train')
 
             correct_mean=Variable(torch.Tensor(numpy.array([1.0])),requires_grad=False).cuda()
             incorrect_mean=Variable(torch.Tensor(numpy.array([0.])),requires_grad=False).cuda()
@@ -1020,23 +1076,12 @@ def train_model_social(optimizer, use_gnn=True, exclude_vision=False, exclude_au
         val_losses, val_accs = [], []
         ds_size=len(dek)
         model.eval()
+        test_block = gc['test_block']
         with torch.no_grad():
             for batch in dev_loader:
                 batch = batch.to(device)
-
-                a = batch.a.reshape(-1, 6, *batch.a.shape[1:])
-                inc = batch.inc.reshape(-1, 6, *batch.inc.shape[1:])
                 
-                a = to_pytorch(flatten_qail(a))
-                inc = to_pytorch(flatten_qail(inc))
-
-                a = a.transpose(1,0)
-                inc = inc.transpose(1,0)
-                interleaved, a_idxs, i_idxs = interleave(a,inc)
-                interleaved = interleaved.transpose(1,0)
-                ai_rep = interleaved
-                
-                correct, incorrect = model(batch, ai_rep, a_idxs, i_idxs)
+                correct, incorrect = get_model_out(batch, test_block, model, 'test')
                 
                 correct_mean=Variable(torch.Tensor(numpy.array([1.0])),requires_grad=False).cuda()
                 incorrect_mean=Variable(torch.Tensor(numpy.array([0.])),requires_grad=False).cuda()
