@@ -1,6 +1,6 @@
 hp = {
     'optimizer': ['adamw'],
-    'batch_size': [32],
+    'bs': [32],
     'global_lr': [1e-03],
     'average_mha': [1],
     'num_gat_layers': [2],

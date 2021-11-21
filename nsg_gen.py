@@ -62,6 +62,9 @@ hash = hashlib.sha1(json.dumps(hp, sort_keys=True).encode('utf-8')).hexdigest()[
 keys, vals = zip(*list(hp.items()))
 grid = [{k:v for k,v in zip(keys,elt)} for elt in list(itertools.product(*vals))]
 
+print('Length of grid:', len(grid))
+# exit()
+
 # create directory structure: within results/, looks like
 '''
 hash1
@@ -91,7 +94,7 @@ if os.path.isdir(hash_path):
 run_scripts_dir = join(RESULTS_PATH, hash, 'run_scripts')
 mkdirp(run_scripts_dir)
 
-exclude_list = 'compute-2-9'
+exclude_list = 'compute-2-9,compute-0-19'
 to_run = []
 for i,comb in enumerate(grid):
     out_dir = join(RESULTS_PATH, hash, str(i))
@@ -170,7 +173,7 @@ def monitor(sleep_secs):
     
     submit_scripts(to_run)
 
-    if len(to_run) == 0 and len(in_progress)==0: # TODO: AND FINISHED
+    if len(to_run) == 0 and len(in_progress)==0:
         program_complete = True
         return
 
@@ -179,7 +182,7 @@ def monitor(sleep_secs):
     in_progress = [elt for elt in in_progress if f"{get_id(elt)}_{hash[:NUM_CHARS_SQUEUE]}" in sbatch_ops]
 
     num_sbatch_ops = get_ops(hash)
-    print(f'To run: {100*len(to_run) / tot_num}%\tIn progress: {100*len(in_progress)/tot_num}%\tFinished: {100*len(finished)/tot_num}% \tnum_sbatch_ops: {num_sbatch_ops}', end='\r')
+    print(f'To run: {100*len(to_run) / tot_num:.1f}%\tIn progress: {100*len(in_progress)/tot_num:.1f}%\tFinished: {100*len(finished)/tot_num:.1f}% \tnum_sbatch_ops: {num_sbatch_ops}', end='\r')
 
     time.sleep(sleep_secs)
 
@@ -206,3 +209,6 @@ df.to_csv(csv_path)
 os.popen('sbatch --mail-type=END --mail-user=dummyblah123@gmail.com --wrap "python hi.py"')
 
 rt.get()
+
+hp_path = join(hash_path, 'hp.json')
+save_json(hp_path, hp)

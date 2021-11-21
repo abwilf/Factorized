@@ -4,7 +4,7 @@ defaults = [
     ("--exclude_vision", bool, False),
     ("--exclude_audio", bool, False),
     ("--exclude_text", bool, False),
-    ("--batch_size", int, 2),
+    ("--bs", int, 2),
     ("--epochs", int, 50),
     ("--cuda", int, 0),
     ("--global_lr", float, 1e-4),
@@ -46,6 +46,10 @@ defaults = [
     ("--use_conv1d", int, 0),
     ("--hidden_dim", int, 50),
     ("--graph_qa", int, 0),
+    ("--solograph", int, 1),
+    ("--solograph_test", int, 0),
+    ("--scene_mean", int, 0), # add mean node to scene rep
+    # ("--scene_agg", int, 0), # add aggregator node to scene rep
 
     ("--use_loss_norm", int, 0),
     ("--use_all_to_all", int, 0),
@@ -63,9 +67,16 @@ defaults = [
     ("--zero_out_audio", int, 0),
     ("--flip_test_order", int, 0),
     ("--flip_train_order", int, 0),
-    ("--use_ai_conn", int, 0),
+
     ("--out_dir", str, '/work/awilf/MTAG/results/hash1'),
     ("--trials", int, 1),
+    ("--train_block", int, 1),
+    ("--test_block", int, 1),
+    ("--use_ai_conn", int, 0),
+    ("--use_qa_conn", int, 1),
+    ("--use_qa_self_conn", int, 1),
+    ("--use_mod_conn", int, 1),
+
 
         # Other settings, these are likely to be fixed all the time
     ("--task", str, 'mosei'),
