@@ -13,6 +13,81 @@ from os.path import join
 from itertools import product
 import collections
 import functools
+# import matplotlib.pyplot as plt
+
+# saving and plotting results
+def get_cloud(arr):
+    '''get tops, bots, means of 2d arr'''
+    arr = np.array(arr)
+    epochs = range(arr.shape[1])
+    stds = [np.std(arr[:, i]) for i in epochs]
+    means = [np.mean(arr[:, i]) for i in epochs]
+    return [means[i] + stds[i] for i in epochs], [means[i] - stds[i] for i in epochs], means
+
+def plot_mtb(result, ax, color, second_color, x_axis=None):
+    '''plot means, upper, lower bounds - x_axis (if specified) is (name, arr) tuple'''
+    linewidth=.6
+    alpha = .6
+    alpha_second = .2
+    x_axis = np.arange(len(result['mean'])) if x_axis is None else x_axis[1]
+    ax.plot(x_axis, result['upper'], color=color, alpha=alpha_second, linewidth=linewidth)
+    ax.plot(x_axis, result['lower'], color=color, alpha=alpha_second, linewidth=linewidth)
+    ax.plot(x_axis, result['mean'], color=color, linewidth=linewidth, label=result['model_name'], alpha=alpha)
+    ax.fill_between(x_axis, result['mean'], result['upper'], linewidth=linewidth, color=second_color, alpha=alpha)
+    ax.fill_between(x_axis, result['mean'], result['lower'], linewidth=linewidth, color=second_color, alpha=alpha)
+
+def plot_results(results, problem, fig_path, x_axis=None):
+    colors = {
+        # 0: ('#00a288', '#00a288'),
+        # 1: ('#bdbe34', '#bdbe34'),
+        # 2: ('#1a515e', '#1a515e'),
+        # 3: ('#52a8b6', '#52a8b6'),
+        # 4: ('#bd3246', '#bd3246'),
+        # 5: ('#36c185', '#36c185'),
+        # 2: ('blue', '#6bb5e3'),
+        0: ('#5c4c9c', '#7384b1'),
+        1: ('red', 'pink'),
+        2: ('black', 'gray'),
+        3: ('#1ea1a1', '#88cacb'),
+        4: ('#ffff21', '#ffffa3')
+
+        # 0:
+    }
+
+    plt.figure(figsize=(12, 9))
+    fig, ax = plt.subplots()
+    ax.spines['top'].set_visible(False)
+    ax.spines['right'].set_visible(False)
+    ax.yaxis.set_major_formatter(FormatStrFormatter('%.2f'))
+
+    if type(PROBLEM_MAP[problem] == tuple):
+        train_ds = ','.join(PROBLEM_MAP[problem][0])
+        test_ds = PROBLEM_MAP[problem][1]
+        plt.title(f'{train_ds} to {test_ds}', fontsize=14, pad=0)
+    else:
+        ds = PROBLEM_MAP[problem]
+        plt.title(f'{ds}', fontsize=14, pad=0)
+
+    plt.xlabel('Epoch' if x_axis is None else x_axis[0], fontsize=12)
+    plt.ylabel('UAR', fontsize=12)
+    for i, result in enumerate(results):
+        if i not in colors:
+            i = 0
+        color, second_color = colors[i]
+        plot_mtb(result, ax, color, second_color, x_axis=x_axis)
+
+    handles, labels = ax.get_legend_handles_labels()
+    labels, handles = zip(*sorted(zip(labels, handles), reverse=True, key=lambda t: np.mean(t[1]._yorig)))
+    labels = lmap(modify_plot_name, labels)
+    leg = ax.legend(handles, labels)
+
+    # leg = ax.legend()
+    for legobj in leg.legendHandles:
+        legobj.set_linewidth(1.3)
+
+    fig.savefig(fig_path, bbox_inches='tight', dpi=300)
+    print(f'Results plotted to {fig_path}')
+
 
 class memoized(object):
    '''Decorator. Caches a function's return value each time it is called.

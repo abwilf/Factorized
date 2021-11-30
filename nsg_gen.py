@@ -9,6 +9,8 @@ import pathlib
 from os.path import join
 import shutil
 import time
+import json
+import numpy as np
 
 HASH_LEN = 15
 # HASH_LEN = -1
@@ -17,6 +19,8 @@ OVERWRITE = 1
 MAX_SBATCH_OPS = 8
 SLEEP_SECS = 2
 NUM_CHARS_SQUEUE = 3 # assume it only shows three characters if running over 100 tests
+
+MEM_GB = 56
 
 class Runtime():
     def __init__(self):
@@ -33,6 +37,22 @@ class Runtime():
         # print(f'\nEnd time: {end_time}')
         print(f'Runtime: {days_str}{hrs_str}{mins} mins')
 
+class NumpyEncoder(json.JSONEncoder):
+    def default(self, obj):
+        if isinstance(obj, np.ndarray):
+            return obj.tolist()
+        return json.JSONEncoder.default(self, obj)
+
+def save_json(file_stub, obj):
+    filename = file_stub
+    for k,v in obj.items():
+        if isinstance(v, list):
+            obj[k] = np.array(v)
+            if obj[k].dtype==np.float32:
+                obj[k] = obj[k].astype(np.float64)
+    with open(filename, 'w') as f:
+        json.dump(obj, f, cls=NumpyEncoder, indent=4)
+    
 def mkdirp(dir_path):
     if not os.path.isdir(dir_path):
         pathlib.Path(dir_path).mkdir(parents=True)
@@ -107,7 +127,7 @@ for i,comb in enumerate(grid):
 #
 #SBATCH -p gpu_low
 #SBATCH --gres=gpu:1  # Use GPU
-#SBATCH --mem 30GB   # memory pool for all cores
+#SBATCH --mem {MEM_GB}GB   # memory pool for all cores
 #SBATCH -t 1-00:00    # time (D-HH:MM)
 #SBATCH -o {join(out_dir,'%N-out.txt')}        # STDOUT. %j specifies JOB_ID.
 #SBATCH -e {join(out_dir,'%N-err.txt')}        # STDERR. See the first link for more options.
@@ -137,7 +157,7 @@ singularity exec --nv -B /work/awilf/awilf/.local/python3.7/site-packages:/home/
         f.write(to_write)
 
 print('\n###\n# Scripts generated...to run one as a trial: ')
-print(f'srun -p gpu_low --exclude {exclude_list} --gres=gpu:1 --mem=30GB --pty bash')
+print(f'srun -p gpu_low --exclude {exclude_list} --gres=gpu:1 --mem={MEM_GB}GB --pty bash')
 print('\n'.join([elt for elt in to_write.split('\n') if len(elt)>0 and elt[0]!='#']))
 print('###\n')
 
@@ -194,7 +214,7 @@ print(f'\n\nhash={hash}\n')
 
 # Consolidate json files into a single csv
 csv_path = join(hash_path, 'csv_results.csv')
-print(f'Writing csv to {csv_path}')
+print(f'Writing csv to \n{csv_path}')
 
 ld = {} # list of dicts
 for path in pathlib.Path(f'results/{hash}/').rglob('*.json'):

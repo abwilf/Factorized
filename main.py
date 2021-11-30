@@ -1131,7 +1131,8 @@ class Solograph_HeteroGNN(torch.nn.Module):
                     lin_r,
                     gc['graph_conv_in_dim'], 
                     hidden_channels//self.heads,
-                    heads=self.heads
+                    heads=self.heads,
+                    dropout=gc['drop_het'],
                 )
                 if mod_l not in mods_seen:
                     mods_seen[mod_l] = _conv.lin_l
@@ -1279,30 +1280,37 @@ def get_model_out(batch, block, model, split):
         ai_rep = interleaved
         return model.forward_inter(batch, ai_rep, a_idxs, i_idxs)
 
+train_loader, dev_loader = None, None
 def train_model_social(optimizer, use_gnn=True, exclude_vision=False, exclude_audio=False, exclude_text=False, average_mha=False, num_gat_layers=1, lr_scheduler=None, reduce_on_plateau_lr_scheduler_patience=None, reduce_on_plateau_lr_scheduler_threshold=None, multi_step_lr_scheduler_milestones=None, exponential_lr_scheduler_gamma=None, use_pe=False, use_prune=False):
-    print('Social path!')
-    trk,dek=mmdatasdk.socialiq.standard_folds.standard_train_fold,mmdatasdk.socialiq.standard_folds.standard_valid_fold
-    #This video has some issues in training set
-    bads=['f5NJQiY9AuY','aHBLOkfJSYI']
-    folds=[trk,dek]
-    for bad in bads:
-        for fold in folds:
-            try:
-                fold.remove(bad)
-            except:
-                pass
+    global train_loader, dev_loader
+    
+    if train_loader is None: # cache train and dev loader so skip data loading in multiple iterations
+        print('Building loaders for social')
+        trk,dek=mmdatasdk.socialiq.standard_folds.standard_train_fold,mmdatasdk.socialiq.standard_folds.standard_valid_fold
+        #This video has some issues in training set
+        bads=['f5NJQiY9AuY','aHBLOkfJSYI']
+        folds=[trk,dek]
+        for bad in bads:
+            for fold in folds:
+                try:
+                    fold.remove(bad)
+                except:
+                    pass
 
-    preloaded_train=process_data(trk, 'train')
-    preloaded_dev=process_data(dek, 'dev')
-    replace_inf(preloaded_train[3])
-    replace_inf(preloaded_dev[3])
+        preloaded_train=process_data(trk, 'train')
+        preloaded_dev=process_data(dek, 'dev')
+        replace_inf(preloaded_train[3])
+        replace_inf(preloaded_dev[3])
 
-    if gc['solograph']:
-        train_loader = get_loader_solograph(preloaded_train, 'social_train')
-        dev_loader = get_loader_solograph(preloaded_dev, 'social_dev')
-    else:
-        train_loader = get_loader(preloaded_train)
-        dev_loader = get_loader(preloaded_dev)
+        if gc['solograph']:
+            train_loader = get_loader_solograph(preloaded_train, 'social_train')
+            dev_loader = get_loader_solograph(preloaded_dev, 'social_dev')
+        else:
+            train_loader = get_loader(preloaded_train)
+            dev_loader = get_loader(preloaded_dev)
+        
+        del preloaded_train
+        del preloaded_dev
 
     #Initializing parameter optimizer
     if gc['solograph']:
@@ -1334,9 +1342,11 @@ def train_model_social(optimizer, use_gnn=True, exclude_vision=False, exclude_au
         'val_losses': [],
     }
 
+    # epochs_since_new_max = 0 # early stopping
     for i in range(gc['epochs']):
+        # if epochs_since_new_max > gc['early_stopping_patience'] and i > 15: # often has a slow start
+        #     break
         print ("Epoch %d"%i)
-        ds_size=len(trk)
         model.train()
         train_losses, train_accs = [],[]
 
@@ -1387,7 +1397,6 @@ def train_model_social(optimizer, use_gnn=True, exclude_vision=False, exclude_au
         metrics['train_acc_best'] = max(train_acc, metrics['train_acc_best'])
 
         val_losses, val_accs = [], []
-        ds_size=len(dek)
         model.eval()
         test_block = gc['test_block']
         with torch.no_grad():
@@ -1412,7 +1421,10 @@ def train_model_social(optimizer, use_gnn=True, exclude_vision=False, exclude_au
             print (f"Dev Acc: {val_acc:.4f}")
             print(f'Dev loss: {val_loss:.4f}')
 
-            metrics['val_acc_best'] = max(val_acc, metrics['val_acc_best'])
+            # epochs_since_new_max += 1
+            # if val_acc > metrics['val_acc_best']:
+            #     epochs_since_new_max = 0
+            #     metrics['val_acc_best'] = val_acc
 
     print('Best dev acc:', metrics['val_acc_best'])
     print('Model parameters:', count_params(model))
