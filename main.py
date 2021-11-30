@@ -735,36 +735,6 @@ def test(loader, model, scheduler, valid):
     #     scheduler.step(mse)
     return l if l != 0 else loss, y_trues, y_preds
 
-def feed_forward(q,a,i,vis,trs,acc,q_lstm,a_lstm,v_lstm,t_lstm,ac_lstm,mfn_mem,mfn_delta1,mfn_delta2,mfn_tfn):
-    reference_shape=q.shape
-
-    q_rep=q_lstm.step(to_pytorch(flatten_qail(q)))[1][0][0,:,:]
-    a_rep=a_lstm.step(to_pytorch(flatten_qail(a)))[1][0][0,:,:]
-    i_rep=a_lstm.step(to_pytorch(flatten_qail(i)))[1][0][0,:,:]
-
-    #transcript representation
-    t_full=t_lstm.step(to_pytorch(trs))
-    #visual representation
-    v_full=v_lstm.step(to_pytorch(vis))
-    #acoustic representation
-    ac_full=ac_lstm.step(to_pytorch(acc))
-
-    t_seq=t_full[0]
-    v_seq=v_full[0]
-    ac_seq=ac_full[0]
-
-    t_rep_extended=reshape_to_correct(t_full[1][0][0,:,:],reference_shape)
-    v_rep_extended=reshape_to_correct(v_full[1][0][0,:,:],reference_shape)
-    ac_rep_extended=reshape_to_correct(ac_full[1][0][0,:,:],reference_shape)
-
-    #MFN and TFN Dance! 
-    before_tfn=torch.cat([mfn_delta2((mfn_delta1(torch.cat([t_seq[i],t_seq[i+1],v_seq[i],v_seq[i+1],ac_seq[i],ac_seq[i+1]],dim=1))*torch.cat([t_seq[i],t_seq[i+1],v_seq[i],v_seq[i+1],ac_seq[i],ac_seq[i+1]],dim=1)))[None,:,:] for i in range(t_seq.shape[0]-1)],dim=0)
-    after_tfn=torch.cat([mfn_tfn.fusion([before_tfn[i,:,:50],before_tfn[i,:,50:70],before_tfn[i,:,70:]])[None,:,:] for i in range(t_seq.shape[0]-1)],dim=0)
-    after_mfn=mfn_mem.step(after_tfn)[1][0][0,:,:]
-    mfn_final=reshape_to_correct(after_mfn,reference_shape)
-
-    return q_rep,a_rep,i_rep,t_rep_extended,v_rep_extended,ac_rep_extended,mfn_final
-
 paths={}
 # paths["QA_BERT_lastlayer_binarychoice"]="/work/awilf/Social-IQ/socialiq/SOCIAL-IQ_QA_BERT_LASTLAYER_BINARY_CHOICE.csd"
 paths["QA_BERT_lastlayer_binarychoice"]="/work/awilf/MTAG/deployed/SOCIAL-IQ_QA_BERT_LASTLAYER_BINARY_CHOICE.csd"
@@ -1432,6 +1402,107 @@ def train_model_social(optimizer, use_gnn=True, exclude_vision=False, exclude_au
     metrics['model_params'] = count_params(model)
     return metrics
 
+trk,dek,preloaded_train,preloaded_dev = None, None, None, None
+def train_social_baseline(optimizer, use_gnn=True, exclude_vision=False, exclude_audio=False, exclude_text=False, average_mha=False, num_gat_layers=1, lr_scheduler=None, reduce_on_plateau_lr_scheduler_patience=None, reduce_on_plateau_lr_scheduler_threshold=None, multi_step_lr_scheduler_milestones=None, exponential_lr_scheduler_gamma=None, use_pe=False, use_prune=False):
+    #if you have enough RAM, specify this as True - speeds things up ;)
+    global trk,dek,preloaded_train,preloaded_dev
+    bs=32
+    if trk is None:
+        print('Loading data...')
+        trk,dek=mmdatasdk.socialiq.standard_folds.standard_train_fold,mmdatasdk.socialiq.standard_folds.standard_valid_fold
+        #This video has some issues in training set
+        bads=['f5NJQiY9AuY','aHBLOkfJSYI']
+        folds=[trk,dek]
+        for bad in bads:
+            for fold in folds:
+                try:
+                    fold.remove(bad)
+                except:
+                    pass
+
+        preloaded_train=process_data(trk, 'train')
+        preloaded_dev=process_data(dek, 'dev')
+        replace_inf(preloaded_train[3])
+        replace_inf(preloaded_dev[3])
+    
+    q_lstm,a_lstm,t_lstm,v_lstm,ac_lstm,mfn_mem,mfn_delta1,mfn_delta2,mfn_tfn=init_tensor_mfn_modules()
+    judge=get_judge().cuda()
+
+    #Initializing parameter optimizer
+    params=	list(q_lstm.parameters())+list(a_lstm.parameters())+list(judge.parameters())+\
+        list(t_lstm.parameters())+list(v_lstm.parameters())+list(ac_lstm.parameters())+\
+        list(mfn_mem.parameters())+list(mfn_delta1.parameters())+list(mfn_delta2.parameters())+list(mfn_tfn.linear_layer.parameters())
+
+    optimizer=optim.Adam(params,lr=gc['global_lr'])
+
+    metrics = {
+        'all_train_accs': [],
+        'all_train_losses': [],
+        'all_dev_accs': [],
+        'all_dev_losses': [],
+    }
+
+    for i in range(gc['epochs']):
+        print ("Epoch %d"%i)
+        losses=[]
+        accs=[]
+        ds_size=len(trk)
+        for j in range(int(ds_size/bs)+1):
+
+            this_trk=[j*bs,(j+1)*bs]
+
+            q_rep,a_rep,i_rep,v_rep,t_rep,ac_rep,mfn_rep=feed_forward(this_trk,q_lstm,a_lstm,v_lstm,t_lstm,ac_lstm,mfn_mem,mfn_delta1,mfn_delta2,mfn_tfn,preloaded_train)
+                
+            real_bs=float(q_rep.shape[0])
+
+            correct=judge(torch.cat((q_rep,a_rep,i_rep,t_rep,v_rep,ac_rep,mfn_rep),1))
+            incorrect=judge(torch.cat((q_rep,i_rep,a_rep,t_rep,v_rep,ac_rep,mfn_rep),1))
+    
+            correct_mean=Variable(torch.Tensor(numpy.array([1.0])),requires_grad=False).cuda()
+            incorrect_mean=Variable(torch.Tensor(numpy.array([0.])),requires_grad=False).cuda()
+            
+            optimizer.zero_grad()
+            loss=(nn.MSELoss()(correct.mean(),correct_mean)+nn.MSELoss()(incorrect.mean(),incorrect_mean))
+            loss.backward()
+            optimizer.step()
+            losses.append(loss.cpu().detach().numpy())
+            accs.append(calc_accuracy(correct,incorrect))
+            
+        print ("Loss %f",numpy.array(losses,dtype="float32").mean())
+        print ("Accs %f",numpy.array(accs,dtype="float32").mean())
+        metrics['all_train_accs'].append(numpy.array(accs,dtype="float32").mean())
+        metrics['all_train_losses'].append(numpy.array(losses,dtype="float32").mean())
+
+        with torch.no_grad():
+            _losses,_accs=[],[]
+            ds_size=len(dek)
+            for j in range(int(ds_size/bs)):
+
+                this_dek=[j*bs,(j+1)*bs]
+
+                q_rep,a_rep,i_rep,v_rep,t_rep,ac_rep,mfn_rep=feed_forward(this_dek,q_lstm,a_lstm,v_lstm,t_lstm,ac_lstm,mfn_mem,mfn_delta1,mfn_delta2,mfn_tfn,preloaded_dev)
+
+                real_bs=float(q_rep.shape[0])
+
+                correct=judge(torch.cat((q_rep,a_rep,i_rep,t_rep,v_rep,ac_rep,mfn_rep),1))
+                incorrect=judge(torch.cat((q_rep,i_rep,a_rep,t_rep,v_rep,ac_rep,mfn_rep),1))
+
+                correct_mean=Variable(torch.Tensor(numpy.array([1.0])),requires_grad=False).cuda()
+                incorrect_mean=Variable(torch.Tensor(numpy.array([0.])),requires_grad=False).cuda()
+                loss=(nn.MSELoss()(correct.mean(),correct_mean)+nn.MSELoss()(incorrect.mean(),incorrect_mean))
+
+                _accs.append(calc_accuracy(correct,incorrect))
+                _losses.append(loss.cpu().detach().numpy())
+            
+        print ("Dev Accs %f",numpy.array(_accs,dtype="float32").mean())
+        print ("Dev Losses %f",numpy.array(_losses,dtype="float32").mean())
+        print ("-----------")
+        metrics['all_dev_accs'].append(numpy.array(_accs,dtype="float32").mean())
+        metrics['all_dev_losses'].append(numpy.array(_losses,dtype="float32").mean())
+    
+    metrics['model_params'] = sum(p.numel() for p in params if p.requires_grad)
+    return metrics
+
 def train_model(optimizer, use_gnn=True, exclude_vision=False, exclude_audio=False, exclude_text=False, average_mha=False, num_gat_layers=1, lr_scheduler=None, reduce_on_plateau_lr_scheduler_patience=None, reduce_on_plateau_lr_scheduler_threshold=None, multi_step_lr_scheduler_milestones=None, exponential_lr_scheduler_gamma=None, use_pe=False, use_prune=False):
     assert lr_scheduler in ['reduce_on_plateau', 'exponential', 'multi_step',
                             None], 'LR scheduler can only be [reduce_on_plateau, exponential, multi_step]!'
@@ -1537,7 +1608,11 @@ if __name__ == "__main__":
     if not gc['eval']:
         start_time = time.time()
         
-        train_fn = train_model if 'social' not in gc['dataset'] else train_model_social
+        if gc['social_baseline']:
+            train_fn = train_social_baseline
+        else:
+            train_fn = train_model if 'social' not in gc['dataset'] else train_model_social
+        
         all_results = []
         for trial in range(gc['trials']):
             print(f'\nTrial {trial}')

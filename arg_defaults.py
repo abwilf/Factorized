@@ -49,6 +49,7 @@ defaults = [
     ("--solograph_test", int, 0),
     ("--scene_mean", int, 1), # add mean node to scene rep
     # ("--scene_agg", int, 0), # add aggregator node to scene rep
+    ("--social_baseline", int, 0), # add aggregator node to scene rep
 
     ("--use_loss_norm", int, 1),
     ("--use_all_to_all", int, 0),

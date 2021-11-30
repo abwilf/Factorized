@@ -57,15 +57,17 @@ def qai_to_tensor(in_put,keys,total_i=1):
 
 def get_judge():
 	return nn.Sequential(OrderedDict([
-		('fc0',   nn.Linear(214,25)),
+		('fc0',   nn.Linear(340,25)),
 		('sig0', nn.Sigmoid()),
 		('fc1',   nn.Linear(25,1)),
 		('sig1', nn.Sigmoid())
 		]))
 
 def flatten_qail(_input):
-	return _input.reshape(-1,*(_input.shape[3:])).squeeze().transpose(1,0)
-	
+	try:
+		return _input.reshape(-1,*(_input.shape[3:])).squeeze().transpose(1,0)
+	except:
+		return _input.reshape(-1,*(_input.shape[3:])).squeeze().transpose(1,0,2)
 
 def build_qa_binary(qa_glove,keys):
 	return qai_to_tensor(qa_glove,keys,1)
