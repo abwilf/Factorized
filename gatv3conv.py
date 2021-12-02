@@ -15,31 +15,26 @@ from torch_geometric.nn.inits import glorot, zeros
 import torch.nn.init as init
 import math
 
-# Real off-the-shelf tied linear module: https://stackoverflow.com/questions/57929299/how-to-share-weights-between-modules-in-pytorch
+# Tied linear module: modified from https://stackoverflow.com/questions/57929299/how-to-share-weights-between-modules-in-pytorch
 class TiedLinear(nn.Module):
-    def __init__(self, tied_to: nn.Linear, bias: bool = True):
+    def __init__(self, tied_to: nn.Linear):
         super().__init__()
         self.tied_to = tied_to
-        if bias:
-            self.bias = nn.Parameter(torch.Tensor(tied_to.in_channels))
-        else:
-            self.register_parameter('bias', None)
-        self.reset_parameters()
-
-    # copied from nn.Linear
-    def reset_parameters(self):
-        if self.bias is not None:
-            fan_in, _ = init._calculate_fan_in_and_fan_out(self.tied_to.weight.t())
-            bound = 1 / math.sqrt(fan_in)
-            init.uniform_(self.bias, -bound, bound)
 
     def forward(self, input: torch.Tensor) -> torch.Tensor:
-        return F.linear(input, self.tied_to.weight.t(), self.bias)
+        return F.linear(input, self.tied_to.weight.t().t(), self.tied_to.bias.t().t())
+    
+    def reset_parameters(self):
+        self.tied_to.reset_parameters()
 
     # To keep module properties intuitive
     @property
     def weight(self) -> torch.Tensor:
-        return self.tied_to.weight.t()
+        return self.tied_to.weight.t().t()
+    
+    @property
+    def bias(self) -> torch.Tensor:
+        return self.tied_to.bias.t().t()
 
 
 class GATv3Conv(MessagePassing):

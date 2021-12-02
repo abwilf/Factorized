@@ -18,3 +18,5 @@ CMU-Multimodal-SDK
 .*.pkl
 credentials.json
 token.json
+
+csvs

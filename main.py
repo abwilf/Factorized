@@ -1074,7 +1074,9 @@ class Solograph_HeteroGNN(torch.nn.Module):
         
         self.hidden_channels = hidden_channels
         self.heads = gc['gat_conv_num_heads']
-        
+
+        assert self.hidden_channels % self.heads == 0, 'Hidden channels must be divisible by number of heads'
+
         self.lin_dict = torch.nn.ModuleDict()
         for node_type in mods:
             self.lin_dict[node_type] = Linear(-1, hidden_channels)
@@ -1082,36 +1084,36 @@ class Solograph_HeteroGNN(torch.nn.Module):
         self.convs = torch.nn.ModuleList()
 
         for i in range(num_layers):
-            # conv = HeteroConv({
-            #     conn_type: GATv2Conv(gc['graph_conv_in_dim'], hidden_channels//self.heads, heads=self.heads)
-            #     for conn_type in all_connections
-            # }, aggr='mean')
+            conv = HeteroConv({
+                conn_type: GATv2Conv(gc['graph_conv_in_dim'], hidden_channels//self.heads, heads=self.heads, dropout=gc['drop_het'])
+                for conn_type in all_connections + qa_conns
+            }, aggr='mean')
             
 
             # UNCOMMENT FOR PARAMETER SHARING
-            mods_seen = {} # mapping from mod to the gatv3conv linear layer for it
-            d = {}
-            for conn_type in all_connections + qa_conns:
-                mod_l, _, mod_r = conn_type
+            # mods_seen = {} # mapping from mod to the gatv3conv linear layer for it
+            # d = {}
+            # for conn_type in all_connections + qa_conns:
+            #     mod_l, _, mod_r = conn_type
 
-                lin_l = None if mod_l not in mods_seen else mods_seen[mod_l]
-                lin_r = None if mod_r not in mods_seen else mods_seen[mod_r]
+            #     lin_l = None if mod_l not in mods_seen else mods_seen[mod_l]
+            #     lin_r = None if mod_r not in mods_seen else mods_seen[mod_r]
 
-                _conv =  GATv3Conv(
-                    lin_l,
-                    lin_r,
-                    gc['graph_conv_in_dim'], 
-                    hidden_channels//self.heads,
-                    heads=self.heads,
-                    dropout=gc['drop_het'],
-                )
-                if mod_l not in mods_seen:
-                    mods_seen[mod_l] = _conv.lin_l
-                if mod_r not in mods_seen:
-                    mods_seen[mod_r] = _conv.lin_r
-                d[conn_type] = _conv
+            #     _conv =  GATv3Conv(
+            #         lin_l,
+            #         lin_r,
+            #         gc['graph_conv_in_dim'], 
+            #         hidden_channels//self.heads,
+            #         heads=self.heads,
+            #         dropout=gc['drop_het'],
+            #     )
+            #     if mod_l not in mods_seen:
+            #         mods_seen[mod_l] = _conv.lin_l
+            #     if mod_r not in mods_seen:
+            #         mods_seen[mod_r] = _conv.lin_r
+            #     d[conn_type] = _conv
             
-            conv = HeteroConv(d, aggr='mean')
+            # conv = HeteroConv(d, aggr='mean')
 
             self.convs.append(conv)
 

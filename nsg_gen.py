@@ -83,7 +83,7 @@ keys, vals = zip(*list(hp.items()))
 grid = [{k:v for k,v in zip(keys,elt)} for elt in list(itertools.product(*vals))]
 
 print('Length of grid:', len(grid))
-# exit()
+exit()
 
 # create directory structure: within results/, looks like
 '''
@@ -182,7 +182,7 @@ def submit_scripts(to_run):
         # print(f'sbatch {run_script}')
         num_sbatch_ops = get_ops(hash)
     
-print(f'\n\nhash={hash}\n')
+print(f'\n\nhash=\'{hash}\'\n')
 print(f'\n## Status ## \nRunning {len(to_run)} scripts total (max {MAX_SBATCH_OPS} at a time) from {run_scripts_dir}\n')
 
 def get_id(path):
@@ -232,3 +232,5 @@ rt.get()
 
 hp_path = join(hash_path, 'hp.json')
 save_json(hp_path, hp)
+
+shutil.copyfile('main.py', join(hash_path, 'main.py'))

@@ -35,7 +35,7 @@ print ("If you do happen to get nans, then the reason is the most recent acousti
 # 	align()
  
 paths={}
-paths["QA_BERT_lastlayer_binarychoice"]="/work/awilf/Social-IQ/socialiq/SOCIAL-IQ_QA_BERT_LASTLAYER_BINARY_CHOICE.csd"
+paths["QA_BERT_lastlayer_binarychoice"]="/work/awilf/MTAG/deployed/SOCIAL-IQ_QA_BERT_LASTLAYER_BINARY_CHOICE.csd"
 paths["DENSENET161_1FPS"]="/work/awilf/MTAG/deployed/b'SOCIAL_IQ_DENSENET161_1FPS'.csd"
 paths["Transcript_Raw_Chunks_BERT"]="/work/awilf/MTAG/deployed/b'SOCIAL_IQ_TRANSCRIPT_RAW_CHUNKS_BERT'.csd"
 paths["Acoustic"]="/work/awilf/MTAG/deployed/b'SOCIAL_IQ_COVAREP'.csd"
