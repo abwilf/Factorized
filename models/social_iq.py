@@ -11,7 +11,6 @@ import torch.optim as optim
 import time
 import scipy.misc
 import os
-import .mylstm as mylstm
 import mmsdk
 from mmsdk import mmdatasdk
 from mmsdk.mmmodelsdk.fusion import TensorFusion
@@ -19,7 +18,7 @@ import numpy
 import pickle
 from random import shuffle
 import time
-
+from .mylstm import MyLSTM
 
 print ("Tensor-MFN code for Social-IQ")
 print ("Yellow warnings fro SDK are ok!")

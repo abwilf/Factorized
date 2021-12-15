@@ -20,3 +20,12 @@ credentials.json
 token.json
 
 csvs
+cmumosi
+
+outputs
+vad*
+VAD*
+voice_data*
+
+factorized
+.vscode

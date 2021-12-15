@@ -1,6 +1,10 @@
+from collections import OrderedDict
 from torch.autograd import Variable
 
 import traceback
+import torch
+import torch.nn as nn
+import torch.optim as optim
 import torch.utils.data as Data
 from datetime import datetime
 import json
@@ -27,12 +31,7 @@ import random
 from arg_defaults import defaults
 from consts import GlobalConsts as gc
 
-from models.mylstm import MyLSTM
-from models.social_iq import *
-from models.alex_utils import *
-from models.common import *
-from models.graph_builder import construct_time_aware_dynamic_graph, build_time_aware_dynamic_graph_uni_modal, build_time_aware_dynamic_graph_cross_modal
-from models.global_const import gc
+from alex_utils import *
 
 SG_PATH = '/work/awilf/Standard-Grid'
 import sys
@@ -42,7 +41,27 @@ import standard_grid
 import gc as g
 from sklearn.metrics import accuracy_score
 
+from torch_geometric.nn import Linear
+
+from hetero_conv import HeteroConv
+from torch_geometric.nn import GCNConv, SAGEConv, GATConv, GATv2Conv, Linear
+from torch_scatter import scatter_mean
+import torch.nn.functional as F
+from gatv3conv import GATv3Conv
+from torch_geometric.data import HeteroData
+from torch_geometric.data import Data
+from HeteroDataLoader import DataLoader
+import torch_geometric.transforms as T
+
+from graph_builder import construct_time_aware_dynamic_graph, build_time_aware_dynamic_graph_uni_modal, build_time_aware_dynamic_graph_cross_modal
+
+import mylstm
+from social_iq import *
+
 SEEDS = list(range(100))
+device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+
+gc = {}
 
 dataset_map = {
     'mosi': MosiDataset,
@@ -55,7 +74,15 @@ dataset_map = {
 
 ie_emos = ["Neutral", "Happy", "Sad", "Angry"]
 
-
+# get all connection types for declaring heteroconv later
+mods = ['text', 'audio', 'video']
+conn_types = ['past', 'pres', 'fut']
+all_connections = []
+for mod in mods:
+    for mod2 in mods:
+        for conn_type in conn_types:
+            all_connections.append((mod, conn_type, mod2))
+mod_conns = [elt for elt in all_connections if not ( (elt[0]=='q' and elt[-1]=='a') or (elt[0]=='a' and elt[-1]=='q') ) ]
 
 def get_fc_combinations(idxs_a, idxs_b): # get array of shape (2, len(idxs_a)*len(idxs_b)) for use in edge_index
     if len(idxs_a) == 0 or len(idxs_b) == 0:
@@ -152,6 +179,188 @@ def eval_mosi_mosei(split, output_all, label_all):
         'f1_raven': f1_raven, # includes zeros, Non-negative VS. Negative
         'f1_mult': f1_mult,  # exclude zeros, Positive VS. Negative
     }
+
+class PositionalEncoding(nn.Module):
+    def __init__(self, d_model, dropout=0.1, max_len=5000):
+        super(PositionalEncoding, self).__init__()
+        self.dropout = nn.Dropout(p=dropout)
+
+        pe = torch.zeros(max_len, d_model)
+        position = torch.arange(0, max_len, dtype=torch.float).unsqueeze(1)
+        div_term = torch.exp(torch.arange(0, d_model, 2).float() * (-math.log(10000.0) / d_model))
+        pe[:, 0::2] = torch.sin(position * div_term)
+        pe[:, 1::2] = torch.cos(position * div_term[:d_model // 2])  # Added to support odd d_model
+        pe = pe.unsqueeze(0).transpose(0, 1).squeeze()
+        self.register_buffer('pe', pe)
+
+    def forward(self, x, counts):
+        pe_rel = torch.cat([self.pe[:count,:] for count in counts])
+        x = x + pe_rel.to(device)
+        return self.dropout(x)
+
+def get_masked(arr):
+    if (arr==0).all():
+        return torch.tensor([]).to(torch.float32)
+    else:
+        if 'mosi' in gc['dataset'] or 'iemocap' in gc['dataset']: # front padded
+            idx = (arr==0).all(dim=-1).to(torch.long).argmin()
+            return arr[idx:]
+
+        elif 'social' in gc['dataset']: # back padded
+            # find idx of last zero element looking from back to front
+            idx = (arr==0).all(dim=-1).to(torch.long).flip(dims=[0]).argmin()
+            return arr[:-idx]
+            
+        else: 
+            assert False, 'Only social, mosi, and iemocap are supported right now.  To add another dataset, break here and see whether front or back padded to seq len'
+
+def get_loader_solograph(ds, dsname):
+    # total_data = load_pk(dsname)
+    # total_data = None
+    # if total_data is None:
+    print(f'Regenerating graphs for {dsname}')
+    words = ds[:][0]
+    covarep = ds[:][1]
+    facet = ds[:][2]
+
+    global gc
+    if 'social' in gc['dataset']:
+        q,a,inc=[torch.from_numpy(data[:]) for data in ds[0]]
+        
+        q = q.reshape(-1, q.shape[1]*q.shape[2], q.shape[-2], q.shape[-1]) # [888, 6, 12, 1, 25, 768] -> [888, 72, 25, 768]
+        a = a.reshape(-1, a.shape[1]*a.shape[2], a.shape[-2], a.shape[-1]) # [888, 6, 12, 1, 25, 768] -> [888, 72, 25, 768]
+        inc = inc.reshape(-1, inc.shape[1]*inc.shape[2], inc.shape[-2], inc.shape[-1]) # [888, 6, 12, 1, 25, 768] -> [888, 72, 25, 768]
+
+        facet=torch.from_numpy(ds[1][:,:,:].transpose(1,0,2))
+        words=torch.from_numpy(ds[2][:,:,:].transpose(1,0,2))
+        covarep=torch.from_numpy(ds[3][:,:,:].transpose(1,0,2))
+        gc['true_bs'] = gc['bs']*q.shape[1] # bs refers to number of videos processed at once, but each q-a-mods is a different graph
+
+    total_data = []
+    for i in tqdm(range(words.shape[0])):
+        data = {
+            'text': get_masked(words[i]),
+            'audio': get_masked(covarep[i]),
+            'video': get_masked(facet[i]),
+        }
+
+        if gc['zero_out_video']:
+            data['video'][:]=0
+        if gc['zero_out_audio']:
+            data['audio'][:]=0
+        if gc['zero_out_text']:
+            data['text'][:]=0
+        
+        if sum([len(v) for v in data.values()]) == 0:
+            continue
+                
+        data = {
+            **data,
+            'text_idx': torch.arange(data['text'].shape[0]),
+            'audio_idx': torch.arange(data['audio'].shape[0]),
+            'video_idx': torch.arange(data['video'].shape[0]),
+        }
+        
+        for mod in mods:
+            ret = build_time_aware_dynamic_graph_uni_modal(data[f'{mod}_idx'],[], [], 0, all_to_all=gc['use_all_to_all'], time_aware=True, type_aware=True)
+            
+            if len(ret) == 0: # no data for this modality
+                continue
+            elif len(ret) == 1:
+                data[mod, 'pres', mod] = ret[0]
+            else:
+                data[mod, 'pres', mod], data[mod, 'fut', mod], data[mod, 'past', mod] = ret
+
+            for mod2 in [modx for modx in mods if modx != mod]: # other modalities
+                ret = build_time_aware_dynamic_graph_cross_modal(data[f'{mod}_idx'],data[f'{mod2}_idx'], [], [], 0, time_aware=True, type_aware=True)
+                
+                if len(ret) == 0:
+                    continue
+                if len(ret) == 2: # one modality only has one element
+                    if len(data[f'{mod}_idx']) > len(data[f'{mod2}_idx']):
+                        data[mod2, 'pres', mod], data[mod, 'pres', mod2] = ret
+                    else:
+                        data[mod, 'pres', mod2], data[mod2, 'pres', mod] = ret
+                
+                else:
+                    if len(data[f'{mod}_idx']) > len(data[f'{mod2}_idx']): # the output we care about is the "longer" sequence
+                        ret = ret[3:]
+                    else:
+                        ret = ret[:3]
+
+                    data[mod, 'pres', mod2], data[mod, 'fut', mod2], data[mod, 'past', mod2] = ret
+
+        for j in range(q.shape[1]): # for each of the 72 q-a pairs, make a new graph
+            # Q-A connections
+            _q = q[i,j][None,:,:] # [1,25,768]
+            _a = a[i,j][None,:,:] # [1,25,768]
+            _inc = inc[i,j][None,:,:] # [1,25,768]
+
+            if np.random.random() < .5: # randomly flip if answer or incorrect is first; shouldn't matter in graph setup
+                _a1 = _a
+                _a2 = _inc
+                a_idx = torch.Tensor([1,0]).to(torch.long)
+                i_idx = torch.Tensor([0,1]).to(torch.long)
+
+            else:
+                _a1 = _inc
+                _a2 = _a
+                a_idx = torch.Tensor([0,1]).to(torch.long)
+                i_idx = torch.Tensor([1,0]).to(torch.long)
+            
+            _as = torch.cat([_a1, _a2], dim=0)
+
+            # Q/A - MOD
+            for mod in mods:
+                data['q', f'q_{mod}', mod] = torch.cat([torch.zeros(data[mod].shape[0])[None,:], torch.arange(data[mod].shape[0])[None,:]], dim=0).to(torch.long) # [ [0,0,...0], [0,1,...len(mod)]]
+                data[mod, f'{mod}_q', 'q'] = torch.clone(data['q', f'q_{mod}', mod]).flip(dims=[0])
+
+                data['a', f'a_{mod}', mod] = torch.cat([
+                    torch.cat([torch.zeros(data[mod].shape[0])[None,:], torch.arange(data[mod].shape[0])[None,:]], dim=0).to(torch.long),
+                    torch.cat([torch.ones(data[mod].shape[0])[None,:], torch.arange(data[mod].shape[0])[None,:]], dim=0).to(torch.long)
+                ], dim=-1)
+                data[mod, f'{mod}_a', 'a'] = torch.clone(data['a', f'a_{mod}', mod]).flip(dims=[0])
+
+            # Q-A
+            data['q', 'q_a', 'a'] = torch.Tensor([ [0,0], [0,1] ]).to(torch.long)
+            data['a', 'a_q', 'q'] = torch.clone(data['q', 'q_a', 'a']).flip(dims=[0])
+
+            # A-A
+            data['a', 'a_a', 'a'] = torch.Tensor([[0,0,1,1],[0,1,0,1]]).to(torch.long)
+
+            hetero_data = {
+                **{k: {'x': v} for k,v in data.items() if 'idx' not in k and not isinstance(k, tuple)}, # just get data on mods
+                **{k: {'edge_index': v} for k,v in data.items() if isinstance(k, tuple) },
+                'q': {'x': _q},
+                'a': {'x': _as},
+                'a_idx': {'x': a_idx},
+                'i_idx': {'x': i_idx},
+                'ds_idx': len(total_data), # index of sample in underlying dataloader data
+            }
+
+            hetero_data = HeteroData(hetero_data) # different "sample" for each video-q-a graph
+            
+            # hetero_data = T.AddSelfLoops()(hetero_data) # todo: include this as a HP to see if it does anything!
+            if 'social' not in gc['dataset']:
+                hetero_data.y = ds[i][-1]
+                hetero_data.id = ds.ids[i]
+            
+            total_data.append(hetero_data)
+        
+        if i == 12 and gc['test']:
+            break
+        
+    # save_pk(dsname, total_data)
+
+    # testing
+    loader = DataLoader(total_data, batch_size=2, shuffle=False)
+    if 'train' in dsname:
+        batch = next(iter(loader))
+        assert torch.all(batch['q', 'q_text', 'text']['edge_index'] == torch.Tensor([[ 0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0, 1,  1,  1,  1,  1,  1,  1,  1,  1,  1,  1,  1,  1,  1,  1,  1,  1,  1], [ 0,  1,  2,  3,  4,  5,  6,  7,  8,  9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35]]).to(torch.long)).item()
+        assert torch.all(batch['text', 'text_q', 'q']['edge_index'] == torch.Tensor([[ 0,  1,  2,  3,  4,  5,  6,  7,  8,  9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35], [ 0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0, 1,  1,  1,  1,  1,  1,  1,  1,  1,  1,  1,  1,  1,  1,  1,  1,  1,  1]]).to(torch.long)).item()
+
+    loader = DataLoader(total_data, batch_size=1, shuffle=True)
+    return loader
 
 
 def get_loader(ds):
@@ -272,8 +481,8 @@ class SocialModel(torch.nn.Module):
     def __init__(self):
         super().__init__()
         
-        self.q_lstm=MyLSTM(768,50)
-        self.a_lstm=MyLSTM(768,50)
+        self.q_lstm=mylstm.MyLSTM(768,50)
+        self.a_lstm=mylstm.MyLSTM(768,50)
         
         self.judge = nn.Sequential(OrderedDict([
             ('fc0',   nn.Linear(214,25)),
@@ -429,7 +638,7 @@ def train(train_loader, model, optimizer):
     model.train()
     if 'iemocap' in gc['dataset']:
         criterion = IEMOCAPInverseSampleCountCELoss()
-        criterion.to(gc['device'])
+        criterion.to(device)
     else: # mosi
         criterion = nn.SmoothL1Loss()
     for batch_i, data in enumerate(tqdm(train_loader)): # need index to prune edges
@@ -448,7 +657,7 @@ def train(train_loader, model, optimizer):
         if cont:
             continue
         
-        data = data.to(gc['device'])
+        data = data.to(device)
         if batch_i == 0:
             with torch.no_grad():  # Initialize lazy modules.
                 out = model(data)
@@ -502,7 +711,7 @@ def test(loader, model, scheduler, valid):
 
         if 'aiEXnCPZubE_24' in data.id:
             a=2
-        data = data.to(gc['device'])
+        data = data.to(device)
         if 'iemocap' in gc['dataset']:
             data.y = data.y.reshape(-1,4)
         out = model(data)
@@ -535,7 +744,37 @@ paths["Transcript_Raw_Chunks_BERT"]="/work/awilf/MTAG/deployed/b'SOCIAL_IQ_TRANS
 paths["Acoustic"]="/work/awilf/MTAG/deployed/b'SOCIAL_IQ_COVAREP'.csd"
 social_iq=mmdatasdk.mmdataset(paths)
 social_iq.unify()
+NUM_QS = 6
+NUM_A_COMBS = 12
 
+qa_conns = [
+    ('text', 'text_q', 'q'),
+    ('audio', 'audio_q', 'q'), 
+    ('video', 'video_q', 'q'), 
+    
+    ('text', 'text_a', 'a'), 
+    ('audio', 'audio_a', 'a'), 
+    ('video', 'video_a', 'a'),
+
+    # flipped above
+    ('q', 'q_text','text'),
+    ('q', 'q_audio','audio'), 
+    ('q', 'q_video','video'), 
+    
+    ('a', 'a_text','text'), 
+    ('a', 'a_audio','audio'), 
+    ('a', 'a_video','video'),
+
+    ('q', 'q_a', 'a'),
+    ('a', 'a_q', 'q'),
+
+    # a to i
+    ('a', 'ai', 'a'),
+
+    # self conns
+    ('a', 'a_a', 'a'),
+    ('q', 'q_q', 'q'),
+]
 
 def bds_to_conns(a,b): # a is batch_dict_1, b is batch_dict_2, return all combinations of the indices that share a batch dict
     '''
@@ -567,7 +806,7 @@ def interleave(a,b):
     assert (a_idxs.shape[0] + b_idxs.shape[0]) == tot_idxs.shape[0]
 
     interleaved = torch.zeros((b.shape[0]*2, *b.shape[1:]), dtype=b.dtype)
-    interleaved = interleaved.to(gc['device'])
+    interleaved = interleaved.to(device)
     interleaved[a_idxs] = a
     interleaved[b_idxs] = b
 
@@ -593,6 +832,356 @@ def get_q_mod_edges(q, v, bi): # q is question indices, v is modality indices, b
     all_edges = (torch.cat(meshs, dim=-1)).to(torch.long)
     return all_edges
 
+class GraphQA_HeteroGNN(torch.nn.Module):
+    def __init__(self, hidden_channels, out_channels, num_layers):
+        super().__init__()
+        
+        self.hidden_channels = hidden_channels
+        self.heads = gc['gat_conv_num_heads']
+        
+        self.lin_dict = torch.nn.ModuleDict()
+        for node_type in mods:
+            self.lin_dict[node_type] = Linear(-1, hidden_channels)
+
+        self.convs = torch.nn.ModuleList()
+        self.qa_convs = torch.nn.ModuleList()
+
+        for i in range(num_layers):          
+
+            # UNCOMMENT FOR PARAMETER SHARING
+            mods_seen = {} # mapping from mod to the gatv3conv linear layer for it
+            d = {}
+            for conn_type in all_connections + qa_conns:
+                mod_l, _, mod_r = conn_type
+
+                lin_l = None if mod_l not in mods_seen else mods_seen[mod_l]
+                lin_r = None if mod_r not in mods_seen else mods_seen[mod_r]
+
+                _conv =  GATv3Conv(
+                    lin_l,
+                    lin_r,
+                    gc['graph_conv_in_dim'], 
+                    hidden_channels//self.heads,
+                    heads=self.heads,
+                    dropout=gc['drop_het'],
+                )
+                if mod_l not in mods_seen:
+                    mods_seen[mod_l] = _conv.lin_l
+                if mod_r not in mods_seen:
+                    mods_seen[mod_r] = _conv.lin_r
+                d[conn_type] = _conv
+            
+            conv = HeteroConv(d, aggr='mean')
+
+            self.convs.append(conv)
+
+            # conv = HeteroConv({
+            #     conn_type: GATv2Conv(gc['graph_conv_in_dim'], hidden_channels//self.heads, heads=self.heads)
+            #     for conn_type in qa_conns+all_connections
+            # }, aggr='mean')
+            # self.qa_convs.append(conv)
+
+        self.pes = {k: PositionalEncoding(gc['graph_conv_in_dim']) for k in mods}
+
+    def map_x(self, x, key):
+        if key in mods:
+            return self.lin_dict[key](x)
+        # elif key == 'q':
+        #     return self.q_lstm.step(x)
+        # elif key == 'a':
+        #     return self.a_lstm.step(x)
+        else:
+            assert False, key+' not an accepted key!'
+
+    def forward(self, x_dict, edge_index_dict, batch_dict, q_rep, a_rep, i_rep, block):
+        # linearly project modalities
+        x_dict = { key: self.map_x(x, key) for key, x in x_dict.items() }
+        
+        # apply pe
+        for m, v in x_dict.items(): # modality, tensor
+            idxs = batch_dict[m]
+            assert (idxs==(idxs.sort().values)).all()
+            _, counts = torch.unique(idxs, return_counts=True)
+            x_dict[m] = self.pes[m](v, counts)
+
+        # # for testing
+        # NUM_QS = 2
+        # NUM_A_COMBS = 6
+        # bdv = torch.Tensor([0,0,0,0,1,1])
+        # batch_dict['v'] = bdv.to(device)
+        # x_dict['v'] = torch.ones(6,10)
+        # q_rep = torch.ones(2,2,10).reshape(-1,10)
+        # a_rep = torch.ones(2,2,6,10).reshape(-1,10)
+        # i_rep = torch.ones(2,2,6,10).reshape(-1,10)
+        # a_rep = torch.cat((a_rep,i_rep),dim=0)
+        # mods = ['v']
+        ##
+        
+        x_dict['q'] = q_rep
+        new_eid = {}
+        bs = q_rep.shape[0] // NUM_QS
+        a_idxs = torch.arange(NUM_QS*bs*NUM_A_COMBS*2)
+        
+        ## Q - mods
+        # get batch dict
+        # like [0,0...,0,1,1,...1,...32,32...32] where each batch idx repeats 6 times for the 6 questions
+        bd_q = torch.arange(bs)[:,None].expand(-1,NUM_QS).reshape(-1)
+        bd_q = bd_q.to(device)
+
+        for mod in mods:
+            new_eid[mod, f'{mod}_q', 'q'] = bds_to_conns(bd_q, batch_dict[mod])
+            new_eid['q', f'q_{mod}', mod] = bds_to_conns(bd_q, batch_dict[mod]).flip(dims=[0])
+
+        # create new edge index dict for qa to be added in at end
+        ## BLOCK
+        if block:
+            x_dict['a'] = torch.cat((a_rep, i_rep),0)
+            ## A / I - mods
+            bd_a = torch.arange(bs)[:,None].expand(-1,NUM_QS*NUM_A_COMBS).reshape(-1)
+            bd_a = torch.cat((bd_a, bd_a), 0) # for i
+            bd_a = bd_a.to(device)
+            ai_split = bs*NUM_A_COMBS*NUM_QS # partition idx between a and i
+
+            if gc['use_mod_conn']:
+                for mod in mods:
+                    new_eid[mod, f'{mod}_a', 'a'] = bds_to_conns(bd_a, batch_dict[mod])
+                    new_eid['a', f'a_{mod}', mod] = bds_to_conns(bd_a, batch_dict[mod]).flip(dims=[0])
+
+            ## Q-A
+            q_idxs = torch.arange(NUM_QS*bs)[:,None].expand(-1, NUM_A_COMBS).reshape(-1)
+            q_idxs = torch.cat((q_idxs, q_idxs))
+
+            if gc['use_qa_conn']:
+                new_eid['q', 'q_a', 'a'] = torch.vstack([q_idxs, a_idxs])
+                new_eid['a', 'a_q', 'q'] = torch.vstack([a_idxs, q_idxs])
+            
+            if gc['use_ai_conn']:
+                new_eid['a', 'ai', 'a'] = torch.cat((torch.vstack([a_idxs[:ai_split], a_idxs[ai_split:]]), torch.vstack([a_idxs[ai_split:], a_idxs[:ai_split]])), dim=-1)
+            
+            if gc['use_qa_self_conn']:
+                q_idxs_unexpanded = torch.arange(NUM_QS*bs)
+                new_eid['q', 'q_q', 'q'] = torch.vstack([q_idxs_unexpanded, q_idxs_unexpanded])
+                new_eid['a', 'a_a', 'a'] = torch.vstack([a_idxs, a_idxs])
+
+        ##
+
+        ## INTERLEAVE
+        else:
+            x_dict['a'] = a_rep
+            ## A - mods
+            bd_a = torch.arange(bs)[:,None].expand(-1,NUM_QS*NUM_A_COMBS*2).reshape(-1)
+            bd_a = bd_a.to(device)
+            if gc['use_mod_conn']:
+                for mod in mods:
+                    new_eid[mod, f'{mod}_a', 'a'] = bds_to_conns(bd_a, batch_dict[mod])
+                    new_eid['a', f'a_{mod}', mod] = bds_to_conns(bd_a, batch_dict[mod]).flip(dims=[0])
+
+            ## Q-A
+            bd_qq = torch.arange(NUM_QS*bs) # treat q as "batch dict of questions", where q0 comes from question 0
+            bd_aq = torch.arange(NUM_QS*bs)[:,None].expand(-1, NUM_A_COMBS*2).reshape(-1) # treat bd_qa as "batch dict of questions", where idxs 0:NUM_A_COMBS*2 come from q1, NUM_A_COMBS*2:2*NUM_A_COMBS*2 come from q2...etc
+            if gc['use_qa_conn']:
+                new_eid['q', 'q_a', 'a'] = bds_to_conns(bd_aq, bd_qq)
+                new_eid['a', 'a_q', 'q'] = bds_to_conns(bd_aq, bd_qq).flip(dims=[0])
+
+            if gc['use_ai_conn']:
+                new_eid['a', 'ai', 'a'] = torch.cat( (torch.arange(a_rep.shape[0]).reshape(-1,2).t(), torch.arange(a_rep.shape[0]).reshape(-1,2).t().flip(dims=[0])), dim=-1)
+                
+            if gc['use_qa_self_conn']:
+                q_idxs_unexpanded = torch.arange(NUM_QS*bs)
+                new_eid['q', 'q_q', 'q'] = torch.vstack([q_idxs_unexpanded, q_idxs_unexpanded])
+                new_eid['a', 'a_a', 'a'] = torch.vstack([a_idxs, a_idxs])
+
+
+        edge_index_dict = {
+            **edge_index_dict,
+            **new_eid,
+        }
+        # move all to cuda
+        for k,v in edge_index_dict.items():
+            if v.device.type=='cpu':
+                edge_index_dict[k] = edge_index_dict[k].to(device)
+
+        for conv in self.convs:
+            x_dict, _ = conv(x_dict , edge_index_dict, return_attention_weights_dict={elt: True for elt in qa_conns+all_connections})
+            x_dict = {key: x[0].relu() for key, x in x_dict.items()}
+
+        # readout: avg nodes (no pruning yet!)
+        q_out = x_dict['q'].reshape(-1,NUM_QS,gc['graph_conv_in_dim'])[:,:,None,:].expand(-1,-1,NUM_A_COMBS,-1).reshape(-1, gc['graph_conv_in_dim']) # (bs*6*12, 64)
+        
+        if block:
+            ai_split = bs*NUM_A_COMBS*NUM_QS # partition idx between a and i
+            a_out = x_dict['a'][:ai_split] # (bs*6*12, 64)
+            i_out = x_dict['a'][ai_split:] # (bs*6*12, 64)
+            return q_out, a_out, i_out
+
+        else:
+            a_out = x_dict['a']
+            return q_out, a_out
+
+class GraphQA_SocialModel(torch.nn.Module):
+    def __init__(self):
+        super().__init__()
+        
+        self.q_lstm = mylstm.MyLSTM(768,gc['graph_conv_in_dim'])
+        self.a_lstm = mylstm.MyLSTM(768,gc['graph_conv_in_dim'])
+
+        self.judge = nn.Sequential(OrderedDict([
+            ('fc0',   nn.Linear(3*gc['graph_conv_in_dim'],25)),
+            ('drop_1', nn.Dropout(p=gc['drop_1'])),
+            ('sig0', nn.Sigmoid()),
+            ('fc1',   nn.Linear(25,1)),
+            ('drop_2', nn.Dropout(p=gc['drop_2'])),
+            ('sig1', nn.Sigmoid())
+        ]))
+
+        self.hetero_gnn = GraphQA_HeteroGNN(gc['graph_conv_in_dim'], 1, gc['num_gat_layers'])
+
+    def forward_block(self, batch):
+        q = batch.q[:,0,0,:,:]
+        q_rep=self.q_lstm.step(q.transpose(1,0))[1][0][0,:,:]
+
+        
+        a = batch.a.reshape(-1, 6, *batch.a.shape[1:])
+        inc = batch.inc.reshape(-1, 6, *batch.inc.shape[1:])
+        
+        a_rep=self.a_lstm.step(to_pytorch(flatten_qail(a)))[1][0][0,:,:]
+        i_rep=self.a_lstm.step(to_pytorch(flatten_qail(inc)))[1][0][0,:,:]
+
+        q_out, a_out, i_out = self.hetero_gnn(batch.x_dict, batch.edge_index_dict, batch.batch_dict, q_rep, a_rep, i_rep, block=True)
+
+        correct = self.judge(torch.cat((q_out, a_out,i_out),1))
+        incorrect = self.judge(torch.cat((q_out, i_out,a_out),1))
+        return correct, incorrect
+
+    def forward_inter(self, batch, ai_rep, a_idxs, i_idxs):
+        q = batch.q[:,0,0,:,:]
+        q_rep=self.q_lstm.step(q.transpose(1,0))[1][0][0,:,:]
+
+        a_rep=self.a_lstm.step(ai_rep)[1][0][0,:,:]
+
+        q_out, a_out = self.hetero_gnn(batch.x_dict, batch.edge_index_dict, batch.batch_dict, q_rep, a_rep, i_rep=None, block=False)
+        i_out = a_out[i_idxs]
+        a_out = a_out[a_idxs]
+
+        correct = self.judge(torch.cat((q_out, a_out, i_out),1))
+        incorrect = self.judge(torch.cat((q_out, i_out, a_out),1))
+        return correct, incorrect
+        
+non_mod_nodes = ['q', 'a', 'a_idx', 'i_idx', 'agg']
+
+class Solograph_HeteroGNN(torch.nn.Module):
+    def __init__(self, hidden_channels, out_channels, num_layers):
+        super().__init__()
+        
+        self.hidden_channels = hidden_channels
+        self.heads = gc['gat_conv_num_heads']
+
+        assert self.hidden_channels % self.heads == 0, 'Hidden channels must be divisible by number of heads'
+
+        self.lin_dict = torch.nn.ModuleDict()
+        for node_type in mods:
+            self.lin_dict[node_type] = Linear(-1, hidden_channels)
+
+        self.convs = torch.nn.ModuleList()
+
+        for i in range(num_layers):
+            conv = HeteroConv({
+                conn_type: GATv2Conv(gc['graph_conv_in_dim'], hidden_channels//self.heads, heads=self.heads, dropout=gc['drop_het'])
+                for conn_type in all_connections + qa_conns
+            }, aggr='mean')
+            
+
+            # UNCOMMENT FOR PARAMETER SHARING
+            # mods_seen = {} # mapping from mod to the gatv3conv linear layer for it
+            # d = {}
+            # for conn_type in all_connections + qa_conns:
+            #     mod_l, _, mod_r = conn_type
+
+            #     lin_l = None if mod_l not in mods_seen else mods_seen[mod_l]
+            #     lin_r = None if mod_r not in mods_seen else mods_seen[mod_r]
+
+            #     _conv =  GATv3Conv(
+            #         lin_l,
+            #         lin_r,
+            #         gc['graph_conv_in_dim'], 
+            #         hidden_channels//self.heads,
+            #         heads=self.heads,
+            #         dropout=gc['drop_het'],
+            #     )
+            #     if mod_l not in mods_seen:
+            #         mods_seen[mod_l] = _conv.lin_l
+            #     if mod_r not in mods_seen:
+            #         mods_seen[mod_r] = _conv.lin_r
+            #     d[conn_type] = _conv
+            
+            # conv = HeteroConv(d, aggr='mean')
+
+            self.convs.append(conv)
+
+        self.pes = {k: PositionalEncoding(gc['graph_conv_in_dim']) for k in mods}
+
+    def forward(self, x_dict, edge_index_dict, batch_dict, ds_idx):
+        mod_dict = {k: v for k,v in x_dict.items() if k not in non_mod_nodes}
+        qa_dict = {k: v for k,v in x_dict.items() if k in non_mod_nodes}
+        mod_dict = {key: self.lin_dict[key](x) for key, x in mod_dict.items()}
+
+        # apply pe
+        for m, v in mod_dict.items(): # modality, tensor
+            idxs = batch_dict[m]
+            assert (idxs==(idxs.sort().values)).all()
+            _, counts = torch.unique(idxs, return_counts=True)
+            mod_dict[m] = self.pes[m](v, counts)
+
+        x_dict = {
+            **mod_dict,
+            **qa_dict,
+        }
+        for conv in self.convs:
+            x_dict, edge_types = conv(x_dict, edge_index_dict, return_attention_weights_dict={elt: True for elt in all_connections+qa_conns})
+
+            attn_dict = {
+                k: {
+                    edge_type: {
+                        'edge_index': edge_index,
+                        'edge_weight': edge_weight,
+                    }
+                    for edge_type, (edge_index, edge_weight) in zip(edge_types[k], v[1])
+                } 
+                for k, v in x_dict.items()
+            }
+            x_dict = {key: x[0].relu() for key, x in x_dict.items()}
+
+        new_attn_dict = {}
+        for mod in mods:
+            new_attn_dict = {**new_attn_dict, **attn_dict[mod]}
+        attn_dict = new_attn_dict
+
+        # update dataloader
+        for mod_con in mod_conns:
+            try:
+                edge_weight = attn_dict[mod_con]['edge_weight'].mean(dim=-1)
+                edge_index = attn_dict[mod_con]['edge_index']
+                idxs = edge_weight.argsort(descending=True)
+                num_nodes_keep = int(gc['prune_keep_p']*idxs.shape[0])
+                idxs = idxs[:num_nodes_keep]
+                pruned_edge_index = edge_index[:,idxs]
+                pruned_edge_index = pruned_edge_index.cpu()
+                loader.dataset[ds_idx[0]][mod_con]['edge_index'] = pruned_edge_index
+            except:
+                print(f'Failed because {mod_con} was not in attn_dict for elt ds_idx: {ds_idx}')
+                hi=2
+
+        # get mean scene rep
+        if gc['scene_mean']:
+            x = torch.cat([v for k,v in x_dict.items() if k not in non_mod_nodes], axis=0)
+            batch_dicts = torch.cat([v for k,v in batch_dict.items() if k not in non_mod_nodes], axis=0)
+            x = scatter_mean(x, batch_dicts, dim=0)
+            scene_rep = x
+
+            return x_dict['q'], x_dict['a'], scene_rep
+        else:
+            return x_dict['q'], x_dict['a']
+
 
 def debug_mem():
     t = torch.cuda.get_device_properties(0).total_memory / 1e9
@@ -605,21 +1194,90 @@ def debug_mem():
     print(f'Free:{f:.4f}')
     print('-- --')
 
+class Solograph(torch.nn.Module):
+    def __init__(self):
+        super().__init__()
+        
+        self.q_lstm = mylstm.MyLSTM(768,gc['graph_conv_in_dim'])
+        self.a_lstm = mylstm.MyLSTM(768,gc['graph_conv_in_dim'])
 
-train_loader, dev_loader = None, None
-def train_model_social(optimizer, use_gnn=True, exclude_vision=False, exclude_audio=False, exclude_text=False, average_mha=False, num_gat_layers=1, lr_scheduler=None, reduce_on_plateau_lr_scheduler_patience=None, reduce_on_plateau_lr_scheduler_threshold=None, multi_step_lr_scheduler_milestones=None, exponential_lr_scheduler_gamma=None, use_pe=False, use_prune=False):
-    global train_loader, dev_loader, gc
+        lin_width = 4 if gc['scene_mean'] else 3
+        self.judge = nn.Sequential(OrderedDict([
+            ('fc0',   nn.Linear(lin_width*gc['graph_conv_in_dim'],25)),
+            ('drop_1', nn.Dropout(p=gc['drop_1'])),
+            ('sig0', nn.Sigmoid()),
+            ('fc1',   nn.Linear(25,1)),
+            ('drop_2', nn.Dropout(p=gc['drop_2'])),
+            ('sig1', nn.Sigmoid())
+        ]))
 
-    if gc['net'] == 'graphqa':
-        from models.graphqa import get_loader_solograph, Solograph
-    
-    elif gc['net'] == 'factorized':
-        from models.factorized import get_loader_solograph, Solograph
+        self.hetero_gnn = Solograph_HeteroGNN(gc['graph_conv_in_dim'], 1, gc['num_gat_layers'])
+
+    def forward(self, batch):
+        x_dict = batch.x_dict
+        x_dict['q'] = self.q_lstm.step(batch['q']['x'].transpose(1,0))[1][0][0,:,:] # input to q_lstm must be of shape ([25, num_qs, 768])
+        x_dict['a'] = self.a_lstm.step(batch['a']['x'].transpose(1,0))[1][0][0,:,:] # input to a_lstm must be of shape ([25, num_qs, 768])
+
+        a_idx, i_idx = x_dict['a_idx'], x_dict['i_idx']
+        del x_dict['a_idx'] # should not be used by heterognn
+        del x_dict['i_idx']
+
+        # assert torch.all(torch.cat([a_idx[None,:], i_idxs[None,:]], dim=0).sum(dim=0) == 1).item()
+        if gc['scene_mean']:
+            q_out, a_out, scene_rep = self.hetero_gnn(x_dict, batch.edge_index_dict, batch.batch_dict, batch['ds_idx'])
+
+            a = a_out[torch.where(a_idx)[0]]
+            inc = a_out[torch.where(i_idx)[0]]
+
+            correct = self.judge(torch.cat((q_out, a, inc, scene_rep), 1))
+            incorrect = self.judge(torch.cat((q_out, inc, a, scene_rep), 1))
+        
+        else:
+            q_out, a_out = self.hetero_gnn(x_dict, batch.edge_index_dict, batch.batch_dict, batch['ds_idx'])
+
+            a = a_out[torch.where(a_idx)[0]]
+            inc = a_out[torch.where(i_idx)[0]]
+
+            correct = self.judge(torch.cat((q_out, a, inc), 1))
+            incorrect = self.judge(torch.cat((q_out, inc, a), 1))
+
+        return correct, incorrect
+
+
+def get_model_out(batch, block, model, split):
+    if gc['solograph'] or not gc['graph_qa']:
+        return model(batch)
+    if block:
+        if gc[f'flip_{split}_order']:
+            if np.random.random() < .5: # flip order of answer and incorrect in testing to make sure model isn't learning something fishy
+                batch.a, batch.inc = batch.inc, batch.a
+                incorrect, correct = model.forward_block(batch)
+            else:
+                correct, incorrect = model.forward_block(batch)
+        else:
+            correct, incorrect = model.forward_block(batch)
+        
+        return correct, incorrect
+        
     else:
-        assert gc['net'] == 'factorized', f'gc[net]needs to be factorized but is {gc["net"]}'
+        a = batch.a.reshape(-1, 6, *batch.a.shape[1:])
+        inc = batch.inc.reshape(-1, 6, *batch.inc.shape[1:])
+        
+        a = to_pytorch(flatten_qail(a))
+        inc = to_pytorch(flatten_qail(inc))
 
-    model = Solograph()
+        a = a.transpose(1,0)
+        inc = inc.transpose(1,0)
+        interleaved, a_idxs, i_idxs = interleave(a,inc)
+        interleaved = interleaved.transpose(1,0)
+        ai_rep = interleaved
+        return model.forward_inter(batch, ai_rep, a_idxs, i_idxs)
 
+train_loader, dev_loader = None, None # used to cache data preprocessing across trials
+loader = None # used as global for pruning
+def train_model_social(optimizer, use_gnn=True, exclude_vision=False, exclude_audio=False, exclude_text=False, average_mha=False, num_gat_layers=1, lr_scheduler=None, reduce_on_plateau_lr_scheduler_patience=None, reduce_on_plateau_lr_scheduler_threshold=None, multi_step_lr_scheduler_milestones=None, exponential_lr_scheduler_gamma=None, use_pe=False, use_prune=False):
+    global train_loader, dev_loader, loader
+    
     if train_loader is None: # cache train and dev loader so skip data loading in multiple iterations
         print('Building loaders for social')
         trk,dek=mmdatasdk.socialiq.standard_folds.standard_train_fold,mmdatasdk.socialiq.standard_folds.standard_valid_fold
@@ -638,19 +1296,25 @@ def train_model_social(optimizer, use_gnn=True, exclude_vision=False, exclude_au
         replace_inf(preloaded_train[3])
         replace_inf(preloaded_dev[3])
 
-        vad_intervals = load_pk('/work/awilf/MTAG/vad_intervals_squashed.pk') # run process_VAD.py to get this output
-        if gc['net'] == 'graphqa':
+        if gc['solograph']:
             train_loader = get_loader_solograph(preloaded_train, 'social_train')
             dev_loader = get_loader_solograph(preloaded_dev, 'social_dev')
         else:
-            train_loader, gc = get_loader_solograph(preloaded_train, vad_intervals, 'social_train', gc)
-            dev_loader, gc = get_loader_solograph(preloaded_dev, vad_intervals, 'social_dev', gc)
+            train_loader = get_loader(preloaded_train)
+            dev_loader = get_loader(preloaded_dev)
         
         del preloaded_train
         del preloaded_dev
 
     #Initializing parameter optimizer
-    model = model.to(gc['device'])
+    if gc['solograph']:
+        model = Solograph()
+    elif gc['graph_qa']:
+        model = GraphQA_SocialModel()
+    else:
+        model = SocialModel()
+    
+    model = model.to(device)
     params= list(model.q_lstm.parameters())+list(model.a_lstm.parameters())+list(model.judge.parameters())
     optimizer=optim.Adam(params,lr=gc['global_lr'])
 
@@ -678,12 +1342,20 @@ def train_model_social(optimizer, use_gnn=True, exclude_vision=False, exclude_au
         #     break
         print ("Epoch %d"%i)
         model.train()
+        loader = train_loader
         train_losses, train_accs = [],[]
 
         train_block = gc['train_block']
         for batch_i, batch in enumerate(tqdm(train_loader)):
-            batch = batch.to(gc['device'])
+            batch = batch.to(device)
 
+            skip = False
+            for mod in mods:
+                if len(batch[mod]['x'].shape) == 1 or batch[mod]['x'].shape[0] in [0,1]:
+                    skip = True
+            if skip:
+                continue
+                
             if batch_i == 0:
                 with torch.no_grad():  # Initialize lazy modules.
                     correct, incorrect = model(batch)
@@ -728,11 +1400,19 @@ def train_model_social(optimizer, use_gnn=True, exclude_vision=False, exclude_au
 
         val_losses, val_accs = [], []
         model.eval()
+        loader = dev_loader
         test_block = gc['test_block']
         with torch.no_grad():
             for batch in dev_loader:
-                batch = batch.to(gc['device'])
+                batch = batch.to(device)
                 
+                skip = False
+                for mod in mods:
+                    if len(batch[mod]['x'].shape) == 1 or batch[mod]['x'].shape[0]==0:
+                        skip = True
+                if skip:
+                    continue
+
                 correct, incorrect = model(batch)
                 
                 correct_mean=Variable(torch.Tensor(numpy.array([1.0])),requires_grad=False).cuda()
@@ -756,6 +1436,7 @@ def train_model_social(optimizer, use_gnn=True, exclude_vision=False, exclude_au
             #     epochs_since_new_max = 0
             #     metrics['val_acc_best'] = val_acc
 
+    print('Best dev acc:', metrics['val_acc_best'])
     print('Model parameters:', count_params(model))
     metrics['model_params'] = count_params(model)
     return metrics
@@ -879,7 +1560,7 @@ def train_model(optimizer, use_gnn=True, exclude_vision=False, exclude_audio=Fal
 
     out_channels = 8 if 'iemocap' in gc['dataset'] else 1
     model = MosiModel(gc['graph_conv_in_dim'], out_channels, gc['num_gat_layers'])
-    model = model.to(gc['device'])
+    model = model.to(device)
     
     optimizer = torch.optim.AdamW(
         model.parameters(), 
@@ -953,8 +1634,6 @@ def get_arguments():
     global gc
     for arg, val in args.__dict__.items():
         gc[arg] = val
-    
-    gc['device'] = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
 if __name__ == "__main__":
     get_arguments() # updates gc
@@ -993,12 +1672,6 @@ if __name__ == "__main__":
         all_results = {k: [dic[k] for dic in all_results] for k in all_results[0].keys()}
         all_results['model_params'] = all_results['model_params'][0]
 
-        all_results['val_acc_best'] = ar(all_results['val_accs']).max(axis=-1)
-        all_results['val_acc_best_mean'] = ar(all_results['val_accs']).max(axis=-1).mean()
-
-        print('Best val accs:', all_results['val_acc_best'])
-        print('Best mean val accs:', all_results['val_acc_best_mean'])
-        
         elapsed_time = time.time() - start_time
         out_dir = join(gc['out_dir'])
         mkdirp(out_dir)

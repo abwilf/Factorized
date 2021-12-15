@@ -44,12 +44,13 @@ defaults = [
     ("--remove_isolated", int, 1),
     ("--use_conv1d", int, 0),
     ("--hidden_dim", int, 50),
-    ("--graph_qa", int, 1),
-    ("--solograph", int, 1),
-    ("--solograph_test", int, 0),
+    ("--net", str, "graphqa"),
+    ("--test", int, 0),
     ("--scene_mean", int, 1), # add mean node to scene rep
     # ("--scene_agg", int, 0), # add aggregator node to scene rep
     ("--social_baseline", int, 0), # add aggregator node to scene rep
+    ("--importancegraph", int, 0), # add aggregator node to scene rep
+    ("--num_agg_nodes", int, 2), # add aggregator node to scene rep
 
     ("--use_loss_norm", int, 1),
     ("--use_all_to_all", int, 0),

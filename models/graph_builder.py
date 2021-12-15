@@ -28,7 +28,7 @@ def construct_full_graph_dynamic(vision, text, audio, v_msk, t_msk, a_msk):
         src, dst = torch.meshgrid(node_index, node_index)
         src, dst = src.flatten(), dst.flatten()
         edge_index = torch.stack((src, dst), 0)
-        edge_index_list.append(edge_index.to(device))
+        edge_index_list.append(edge_index.to(gc['device']))
         # Construct the node features
         node_features = torch.cat((v[vm], t[tm], a[am]), 0)
         batch_x.append(node_features)
@@ -60,8 +60,8 @@ def construct_time_aware_dynamic_graph(vision, text, audio, v_msk, t_msk, a_msk,
         # Constructing node features and types
         node_features = torch.cat((v[vm], t[tm], a[am]), 0)
         node_types = torch.cat((torch.zeros(len(v[vm])), torch.zeros(len(t[tm])) + 1, torch.zeros(len(a[am])) + 2))
-        batch_x.append(node_features.to(device))
-        batch_x_type.append(node_types.long().to(device))
+        batch_x.append(node_features.to(gc['device']))
+        batch_x_type.append(node_types.long().to(gc['device']))
 
         # Constructing time aware dynamic graph edge index and types
         edge_index_list, edge_types = [], []
@@ -120,8 +120,8 @@ def construct_time_aware_dynamic_graph(vision, text, audio, v_msk, t_msk, a_msk,
             ipdb.set_trace()
 
         edge_types = torch.cat(edge_types)
-        batch_edge_index.append(edge_index.to(device))
-        batch_edge_types.append(edge_types.long().to(device))
+        batch_edge_index.append(edge_index.to(gc['device']))
+        batch_edge_types.append(edge_types.long().to(gc['device']))
     return batch_x, batch_x_type, batch_edge_index, batch_edge_types
 
 

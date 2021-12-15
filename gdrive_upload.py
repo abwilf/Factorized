@@ -25,9 +25,9 @@ if not creds or not creds.valid:
 
 service = build('drive', 'v3', credentials=creds)
 
-folder_id ='1K6kW5SBz3-xmpvfk5Jj97DpQkvOJQm6z' # parent folder
+folder_id ='1HBOZlh3qaogJvBpwaP-11BtTpLwancff' # parent folder
 
-upload_file_list = ['deployed.tar']
+upload_file_list = ['/work/awilf/tonicnet.tar']
 for name in upload_file_list:
     file_metadata = {
         'name': name,

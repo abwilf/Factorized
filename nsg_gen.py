@@ -210,7 +210,7 @@ while not program_complete:
     monitor(SLEEP_SECS)
 
 print('\n\nProgram Complete!')
-print(f'\n\nhash={hash}\n')
+print(f'\n\nhash=\'{hash}\'\n')
 
 # Consolidate json files into a single csv
 csv_path = join(hash_path, 'csv_results.csv')
