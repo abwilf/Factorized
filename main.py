@@ -1018,3 +1018,6 @@ if __name__ == "__main__":
         logging.info("Total evaluation time: {}".format(
             time.strftime("%H:%M:%S", time.gmtime(time.time() - start_time)))
         )
+
+    with open(join(gc['out_dir'], 'success.txt'), 'w'):
+        pass
