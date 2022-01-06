@@ -5,6 +5,27 @@
 # }
 
 
+## SUBSET EXAMPLE: generates 8+8=16 instead of 32; make sure all the same variables are present in each subset
+# hp = {
+#     'a': [1,2],
+#     'subsets': [
+#         {
+#             'b': [3,4],
+#             'c': [5,6],
+#             'd': [7],
+#             'e': [9],
+#         },
+#         {
+#             'd': [7,8],
+#             'e': [9,10],
+#             'b': [3],
+#             'c': [5],
+#         }
+#     ]
+# }
+
+
+
 ## hp search over solograph model
 # hp = {
 #     'bs': [15],

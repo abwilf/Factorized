@@ -29,3 +29,6 @@ voice_data*
 
 factorized
 .vscode
+
+gdrive*.json
+*credentials*.json

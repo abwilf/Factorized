@@ -146,7 +146,7 @@ for i,comb in enumerate(grid):
 #SBATCH -o {join(out_dir,'%N-out.txt')}        # STDOUT. %j specifies JOB_ID.
 #SBATCH -e {join(out_dir,'%N-err.txt')}        # STDERR. See the first link for more options.
 #SBATCH --job-name {i}_{hash}        # STDERR. See the first link for more options.
-#SBATCH --mail-type=FAIL
+#SBATCH --mail-type=NONE
 #SBATCH --mail-user=dummyblah123@gmail.com
 #SBATCH --exclude={exclude_list}
 
@@ -268,3 +268,5 @@ for i in range(len(grid)):
         report['num_successful'] += 1
 
 save_json(join(hash_path, 'report.json'), report)
+
+print(f'\n{hash}')
