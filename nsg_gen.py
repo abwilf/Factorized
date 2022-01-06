@@ -11,6 +11,7 @@ import shutil
 import time
 import json
 import numpy as np
+from glob import glob
 
 HASH_LEN = 15
 # HASH_LEN = -1
@@ -76,11 +77,25 @@ from hp import hp
 
 rt = Runtime()
 
-
 hash = hashlib.sha1(json.dumps(hp, sort_keys=True).encode('utf-8')).hexdigest()[:HASH_LEN]
 
-keys, vals = zip(*list(hp.items()))
-grid = [{k:v for k,v in zip(keys,elt)} for elt in list(itertools.product(*vals))]
+if 'subsets' in hp.keys():
+    all_grids = []
+    subsets = hp['subsets']
+    del hp['subsets']
+
+    for sub in subsets:
+        sub_hp = {**hp, **sub}
+        keys, vals = zip(*list(sub_hp.items()))
+        grid = [{k:v for k,v in zip(keys,elt)} for elt in list(itertools.product(*vals))]
+        all_grids.extend(grid)
+
+    grid = all_grids
+else:
+    keys, vals = zip(*list(hp.items()))
+    grid = [{k:v for k,v in zip(keys,elt)} for elt in list(itertools.product(*vals))]
+
+
 
 print('Length of grid:', len(grid))
 exit()
@@ -120,7 +135,6 @@ for i,comb in enumerate(grid):
     out_dir = join(RESULTS_PATH, hash, str(i))
     mkdirp(out_dir)
 
-
     to_add = ' '.join([f'--{k} {v}' for k,v in comb.items()]) + f' --out_dir {out_dir}'
     to_write = f'''\
 #!/bin/bash
@@ -149,7 +163,7 @@ singularity exec --nv -B /work/awilf/awilf/.local/python3.7/site-packages:/home/
 
 '''
 
-    # write to run_i.sh file
+    # write to run_{i}.sh file
     run_script = join(run_scripts_dir, f'{i}.sh')
     to_run.append(run_script)
     file_path = run_script
@@ -234,3 +248,23 @@ hp_path = join(hash_path, 'hp.json')
 save_json(hp_path, hp)
 
 shutil.copyfile('main.py', join(hash_path, 'main.py'))
+
+# compile error report
+report = {
+    'num_combs': len(grid),
+    'num_successful': 0,
+    'num_failed': 0,
+    'errors': {}
+}
+
+for i in range(len(grid)):
+    if 'success.txt' not in [elt.split('/')[-1] for elt in glob(join(hash_path, f'{i}', '*'))]:
+        report['num_failed'] += 1
+        report['errors'][i] = {
+            'hp': grid[i],
+            'err': open([elt for elt in glob(join(hash_path, f'{i}', '*')) if 'err.txt' in elt][0]).read()
+        }
+    else:
+        report['num_successful'] += 1
+
+save_json(join(hash_path, 'report.json'), report)
