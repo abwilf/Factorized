@@ -53,38 +53,34 @@ non_mod_nodes = ['q', 'a', 'a_idx', 'i_idx', 'z']
 
 
 def get_loader_solograph_chunk(ds, vad_intervals, dsname, gc):
-    # total_data = load_pk(dsname)
-    # total_data = None
-    # if total_data is None:
     print('Chunk graphs')
     print(f'Regenerating graphs for {dsname}')
     keys, intervals = ds[-2:]
 
-    if 'social' in gc['dataset']:
-        q,a,inc=[torch.from_numpy(data[:]) for data in ds[0]]
-        
-        q = q.reshape(-1, q.shape[1]*q.shape[2], q.shape[-2], q.shape[-1]) # [888, 6, 12, 1, 25, 768] -> [888, 72, 25, 768]
-        a = a.reshape(-1, a.shape[1]*a.shape[2], a.shape[-2], a.shape[-1]) # [888, 6, 12, 1, 25, 768] -> [888, 72, 25, 768]
-        inc = inc.reshape(-1, inc.shape[1]*inc.shape[2], inc.shape[-2], inc.shape[-1]) # [888, 6, 12, 1, 25, 768] -> [888, 72, 25, 768]
+    q,a,inc=[torch.from_numpy(data[:]) for data in ds[0]]
+    
+    q = q.reshape(-1, q.shape[1]*q.shape[2], q.shape[-2], q.shape[-1]) # [888, 6, 12, 1, 25, 768] -> [888, 72, 25, 768]
+    a = a.reshape(-1, a.shape[1]*a.shape[2], a.shape[-2], a.shape[-1]) # [888, 6, 12, 1, 25, 768] -> [888, 72, 25, 768]
+    inc = inc.reshape(-1, inc.shape[1]*inc.shape[2], inc.shape[-2], inc.shape[-1]) # [888, 6, 12, 1, 25, 768] -> [888, 72, 25, 768]
 
-        facet=torch.from_numpy(ds[1][:,:,:].transpose(1,0,2))
-        words=torch.from_numpy(ds[2][:,:,:].transpose(1,0,2))
-        covarep=torch.from_numpy(ds[3][:,:,:].transpose(1,0,2))
+    facet=torch.from_numpy(ds[1][:,:,:].transpose(1,0,2))
+    words=torch.from_numpy(ds[2][:,:,:].transpose(1,0,2))
+    covarep=torch.from_numpy(ds[3][:,:,:].transpose(1,0,2))
 
-        # trim to just word keys
-        word_keys = load_pk(f'{dsname}_word_keys.pk')
-        idxs = ar([keys.index(elt) for elt in word_keys])
-        assert (np.sort(idxs)==idxs).all(), 'word_keys are sorted differently from chunk keys'
-        q = q[idxs]
-        a = a[idxs]
-        inc = inc[idxs]
-        facet = facet[idxs]
-        words = words[idxs]
-        covarep = covarep[idxs]
-        keys = ar(keys)[idxs]
-        intervals = ar(intervals)[idxs]
+    # trim to just word keys
+    word_keys = load_pk(f'{dsname}_word_keys.pk')
+    idxs = ar([keys.index(elt) for elt in word_keys])
+    assert (np.sort(idxs)==idxs).all(), 'word_keys are sorted differently from chunk keys'
+    q = q[idxs]
+    a = a[idxs]
+    inc = inc[idxs]
+    facet = facet[idxs]
+    words = words[idxs]
+    covarep = covarep[idxs]
+    keys = ar(keys)[idxs]
+    intervals = ar(intervals)[idxs]
 
-        gc['true_bs'] = gc['bs']*q.shape[1] # bs refers to number of videos processed at once, but each q-a-mods is a different graph
+    gc['true_bs'] = gc['bs']*q.shape[1] # bs refers to number of videos processed at once, but each q-a-mods is a different graph
 
     total_data = []
     num_skipped = 0
@@ -378,24 +374,6 @@ def get_loader_solograph_chunk(ds, vad_intervals, dsname, gc):
     loader = DataLoader(total_data, batch_size=gc['true_bs'], shuffle=True)
     return loader,gc
 
-def get_fc_edges_window(idx1, idx2, window):
-    # window = 2 # if idxs differ by more than this, don't include them
-    # e.g. idx1 = idx2 = torch.arange(5), window = 2
-    # tensor([[0, 0, 0, 1, 1, 1, 1, 2, 2, 2, 2, 2, 3, 3, 3, 3, 4, 4, 4],
-    # [0, 1, 2, 0, 1, 2, 3, 0, 1, 2, 3, 4, 1, 2, 3, 4, 2, 3, 4]])
-    arr = torch.cat([elt[None,:] for elt in torch.meshgrid(idx1, idx2)]).reshape(2,-1)
-    valid_idxs = torch.where(torch.abs(arr[1,:]-arr[0,:]) <= window)[0]
-    arr = arr[:,valid_idxs]
-    return arr
-    
-def get_fc_edges_pastfut_window(idx1, idx2, window, idx1_earlier):
-    arr = get_fc_edges_window(idx1,idx2,window)
-    if idx1_earlier:
-        valid_idxs = torch.where(arr[0,:]<arr[1,:])[0]
-    else:
-        valid_idxs = torch.where(arr[0,:]>arr[1,:])[0]
-    return arr[:,valid_idxs]
-    
 def get_loader_solograph_word(ds, vad_intervals, dsname, gc):
     # total_data = load_pk(dsname)
     # total_data = None
@@ -406,17 +384,16 @@ def get_loader_solograph_word(ds, vad_intervals, dsname, gc):
 
     save_pk(f'{dsname}_word_keys.pk', keys)
 
-    if 'social' in gc['dataset']:
-        q,a,inc=[torch.from_numpy(data[:]) for data in ds[0]]
-        
-        q = q.reshape(-1, q.shape[1]*q.shape[2], q.shape[-2], q.shape[-1]) # [888, 6, 12, 1, 25, 768] -> [888, 72, 25, 768]
-        a = a.reshape(-1, a.shape[1]*a.shape[2], a.shape[-2], a.shape[-1]) # [888, 6, 12, 1, 25, 768] -> [888, 72, 25, 768]
-        inc = inc.reshape(-1, inc.shape[1]*inc.shape[2], inc.shape[-2], inc.shape[-1]) # [888, 6, 12, 1, 25, 768] -> [888, 72, 25, 768]
+    q,a,inc=[torch.from_numpy(data[:]) for data in ds[0]]
+    
+    q = q.reshape(-1, q.shape[1]*q.shape[2], q.shape[-2], q.shape[-1]) # [888, 6, 12, 1, 25, 768] -> [888, 72, 25, 768]
+    a = a.reshape(-1, a.shape[1]*a.shape[2], a.shape[-2], a.shape[-1]) # [888, 6, 12, 1, 25, 768] -> [888, 72, 25, 768]
+    inc = inc.reshape(-1, inc.shape[1]*inc.shape[2], inc.shape[-2], inc.shape[-1]) # [888, 6, 12, 1, 25, 768] -> [888, 72, 25, 768]
 
-        facet=torch.from_numpy(ds[1][:,:,:].transpose(1,0,2))
-        words=torch.from_numpy(ds[2][:,:,:].transpose(1,0,2))
-        covarep=torch.from_numpy(ds[3][:,:,:].transpose(1,0,2))
-        gc['true_bs'] = gc['bs']*q.shape[1] # bs refers to number of videos processed at once, but each q-a-mods is a different graph
+    facet=torch.from_numpy(ds[1][:,:,:].transpose(1,0,2))
+    words=torch.from_numpy(ds[2][:,:,:].transpose(1,0,2))
+    covarep=torch.from_numpy(ds[3][:,:,:].transpose(1,0,2))
+    gc['true_bs'] = gc['bs']*q.shape[1] # bs refers to number of videos processed at once, but each q-a-mods is a different graph
 
     total_data = []
     num_skipped = 0
@@ -754,7 +731,6 @@ def get_loader_solograph_word(ds, vad_intervals, dsname, gc):
     loader = DataLoader(total_data, batch_size=gc['true_bs'], shuffle=True)
     return loader,gc
 
-
 class Solograph_HeteroGNN(torch.nn.Module):
     def __init__(self, hidden_channels, out_channels, num_layers):
         super().__init__()
@@ -792,9 +768,6 @@ class Solograph_HeteroGNN(torch.nn.Module):
             assert (idxs==(idxs.sort().values)).all()
             _, counts = torch.unique(idxs, return_counts=True)
             mod_dict[m] = self.pes[m](v, counts)
-
-        # init z
-        # x_dict['z'] = 
         
         x_dict = {
             **mod_dict,
@@ -802,12 +775,6 @@ class Solograph_HeteroGNN(torch.nn.Module):
         }
         
         for i,conv in enumerate(self.convs):
-            if gc['BASELINE'] and i == 0:
-                save_pk('x_dict.pk', x_dict)
-                save_pk('edge_index_dict.pk', edge_index_dict)
-                gc['x_dict_old'] = x_dict
-                gc['edge_index_dict_old'] = edge_index_dict
-
             x_dict, edge_types = conv(x_dict, edge_index_dict, return_attention_weights_dict={elt: True for elt in all_connections+qa_conns + z_conns})
 
             attn_dict = {

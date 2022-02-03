@@ -41,6 +41,23 @@ tens = torch.Tensor
 def get_fc_edges(edges_a, edges_b):
     return torch.cat([elt[None,:] for elt in torch.meshgrid(edges_a, edges_b)]).reshape(2,-1)
 
+def get_fc_edges_window(idx1, idx2, window):
+    # window = 2 # if idxs differ by more than this, don't include them
+    # e.g. idx1 = idx2 = torch.arange(5), window = 2
+    # tensor([[0, 0, 0, 1, 1, 1, 1, 2, 2, 2, 2, 2, 3, 3, 3, 3, 4, 4, 4],
+    # [0, 1, 2, 0, 1, 2, 3, 0, 1, 2, 3, 4, 1, 2, 3, 4, 2, 3, 4]])
+    arr = torch.cat([elt[None,:] for elt in torch.meshgrid(idx1, idx2)]).reshape(2,-1)
+    valid_idxs = torch.where(torch.abs(arr[1,:]-arr[0,:]) <= window)[0]
+    arr = arr[:,valid_idxs]
+    return arr
+    
+def get_fc_edges_pastfut_window(idx1, idx2, window, idx1_earlier):
+    arr = get_fc_edges_window(idx1,idx2,window)
+    if idx1_earlier:
+        valid_idxs = torch.where(arr[0,:]<arr[1,:])[0]
+    else:
+        valid_idxs = torch.where(arr[0,:]>arr[1,:])[0]
+    return arr[:,valid_idxs]
 
 def get_masked(arr):
     if (arr==0).all():

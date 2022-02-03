@@ -21,7 +21,7 @@ MAX_SBATCH_OPS = 8
 SLEEP_SECS = 2
 NUM_CHARS_SQUEUE = 3 # assume it only shows three characters if running over 100 tests
 
-MEM_GB = 56
+MEM_GB = 64
 
 class Runtime():
     def __init__(self):
@@ -98,7 +98,6 @@ else:
 
 
 print('Length of grid:', len(grid))
-exit()
 
 # create directory structure: within results/, looks like
 '''
@@ -262,7 +261,8 @@ for i in range(len(grid)):
         report['num_failed'] += 1
         report['errors'][i] = {
             'hp': grid[i],
-            'err': open([elt for elt in glob(join(hash_path, f'{i}', '*')) if 'err.txt' in elt][0]).read()
+            'err': open([elt for elt in glob(join(hash_path, f'{i}', '*')) if 'err.txt' in elt][0]).read(),
+            'node': [elt for elt in glob(join(hash_path, f'{i}', '*')) if 'err.txt' in elt][0].split('-err')[0],
         }
     else:
         report['num_successful'] += 1
