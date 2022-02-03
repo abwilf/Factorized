@@ -109,7 +109,8 @@ def train_model_social():
         replace_inf(preloaded_dev[3])
 
         # TODO: clean up global variables here
-        intervals_path = 'vad_intervals_squashed.pk' if gc['gran'] == 'chunk' else 'bert_features.pk'
+        intervals_subpath = 'vad_intervals_squashed.pk' if gc['gran'] == 'chunk' else 'bert_features.pk'
+        intervals_path = join(gc['data_path'], intervals_subpath)
         intervals = load_pk(intervals_path)
         if gc['net'] == 'graphqa':
             train_loader = get_loader_solograph(preloaded_train, 'social_train')
@@ -262,7 +263,7 @@ def train_social_baseline():
                     pass
         
         if gc['factorized_key_subset']:
-            factorized_keys = load_pk('social_train_keys.pk') + load_pk('social_dev_keys.pk')
+            factorized_keys = load_pk(join(gc['data_path'], 'social_train_keys_word.pk')) + load_pk(join(gc['data_path'], 'social_dev_keys_word.pk'))
             trk = lfilter(lambda elt: elt in factorized_keys, trk)
             dek = lfilter(lambda elt: elt in factorized_keys, dek)
 

@@ -69,25 +69,24 @@ def align():
 	#second time dl
 	# socialiq_no_align=mmdatasdk.mmdataset("socialiq")
 
-	dataset = mmdatasdk.mmdataset(recipe={'dummy': 'social_unaligned_csds/dummy.csd'})
+	dataset = mmdatasdk.mmdataset(recipe={'dummy': join(gc['data_path'], 'dummy.csd')})
 	del dataset.computational_sequences['dummy']
 
 	if gc['gran'] == 'chunk':
-		add_seq(dataset, '/work/awilf/MTAG/blah/SOCIAL_IQ_TRANSCRIPT_RAW_CHUNKS_BERT.csd', 'Transcript_Raw_Chunks_BERT')
+		add_seq(dataset, join(gc["data_path"], 'SOCIAL_IQ_TRANSCRIPT_RAW_CHUNKS_BERT.csd'), 'Transcript_Raw_Chunks_BERT')
 	else:
-		add_seq(dataset, '/work/awilf/MTAG/social_unaligned_csds/bert_word_features.pk', 'Transcript_Raw_Chunks_BERT')
+		add_seq(dataset, join(gc["data_path"], 'bert_word_csd.pk'), 'Transcript_Raw_Chunks_BERT')
 
-	add_seq(dataset, '/work/awilf/MTAG/social_unaligned_csds/SOCIAL_IQ_COVAREP.csd', 'Acoustic')
-	add_seq(dataset, '/work/awilf/MTAG/social_unaligned_csds/SOCIAL_IQ_DENSENET161_1FPS.csd', 'DENSENET161_1FPS')
+	add_seq(dataset, join(gc["data_path"], 'SOCIAL_IQ_COVAREP.csd'), 'Acoustic')
+	add_seq(dataset, join(gc["data_path"], 'SOCIAL_IQ_DENSENET161_1FPS.csd'), 'DENSENET161_1FPS')
 	
-	dataset
-	# add_seq(dataset, '/work/awilf/MTAG/social_unaligned_csds/SOCIAL_IQ_COVAREP.csd')
+	# add_seq(dataset, '/work/awilf/MTAG/data/SOCIAL_IQ_COVAREP.csd')
 
 	# recipe = {
-	#     'Acoustic': '/work/awilf/MTAG/social_unaligned_csds/SOCIAL_IQ_COVAREP.csd',
-	#     'DENSENET161_1FPS': '/work/awilf/MTAG/social_unaligned_csds/SOCIAL_IQ_DENSENET161_1FPS.csd',
-	#     # 'SOCIAL_IQ_TRANSCRIPT_RAW_CHUNKS_BERT': '/work/awilf/MTAG/social_unaligned_csds/SOCIAL_IQ_TRANSCRIPT_RAW_CHUNKS_BERT.csd',
-	#     'Transcript_Raw_Chunks_BERT': '/work/awilf/MTAG/social_unaligned_csds/bert_word_features.csd',
+	#     'Acoustic': '/work/awilf/MTAG/data/SOCIAL_IQ_COVAREP.csd',
+	#     'DENSENET161_1FPS': '/work/awilf/MTAG/data/SOCIAL_IQ_DENSENET161_1FPS.csd',
+	#     # 'SOCIAL_IQ_TRANSCRIPT_RAW_CHUNKS_BERT': '/work/awilf/MTAG/data/SOCIAL_IQ_TRANSCRIPT_RAW_CHUNKS_BERT.csd',
+	#     'Transcript_Raw_Chunks_BERT': '/work/awilf/MTAG/data/bert_word_csd.csd',
 	# }
 	# dataset = mmdatasdk.mmdataset(recipe)
 
@@ -179,7 +178,7 @@ def process_data(keys, name, _gc):
 	global gc,social_iq # need for seq_len; so we don't reprocess
 	gc = _gc
 
-	save_path = f'/work/awilf/MTAG/{name}_social_{gc["gran"]}_{gc["seq_len"]}.pk'
+	save_path = join(gc['data_path'], f'{name}_social_{gc["gran"]}_{gc["seq_len"]}.pk')
 	res = load_pk(save_path)
 	if res is None:
 	# if True:

@@ -8,7 +8,7 @@ from tqdm import tqdm
 # wav_dir = '/work/awilf/social_iq_raw/acoustic/wav/'
 # wav_paths = os.listdir(wav_dir)
 
-# all_intervals = load_pk('vad_intervals.pk')
+# all_intervals = load_pk('data/vad_intervals.pk')
 # for wav_path in tqdm(wav_paths):
 #     if wav_path in all_intervals:
 #         continue
@@ -22,7 +22,7 @@ from tqdm import tqdm
 
 ## squash
 import numpy as np
-vad_intervals = load_pk('vad_intervals.pk')
+vad_intervals = load_pk('data/vad_intervals.pk')
 vad_intervals = {k.split('_trimmed')[0]: v for k,v in vad_intervals.items()}
 vad_intervals = {k: np.array([ [np.float32(elt2) for elt2 in elt.replace('speaker_', '').split(' ')] for elt in v]) for k,v in vad_intervals.items() if v is not None}
 
@@ -49,4 +49,4 @@ for k in vad_intervals.keys():
     
     vad_intervals[k] = new_arr
 
-save_pk('vad_intervals_squashed.pk', vad_intervals)
+save_pk('data/vad_intervals_squashed.pk', vad_intervals)

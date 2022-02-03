@@ -1,8 +1,8 @@
 # Updated MTAG
-This repository contains code for a rewritten and updated version of [MTAG](https://github.com/jedyang97/MTAG) as part of ANLP 11-711's third course project.
+This repository contains code for a rewritten and updated version of [MTAG](https://github.com/jedyang97/MTAG) applied to Social-IQ using a novel Factorized Graph Neural Network Approach. Below, you will find dependency installation instructions, instructions for how to download the data and custom repositories, run scripts, and finally an overview of the code.
 
 ## Installation
-Torch-geometric is notoriously difficult to get working with different versions.  If it isn't working for you, check out their [installation page](https://pytorch-geometric.readthedocs.io/en/latest/notes/installation.html).
+Torch-geometric is notoriously difficult to get working with different versions.  If it isn't working for you, check out their [installation page](https://pytorch-geometric.readthedocs.io/en/latest/notes/installation.html).  Here's what works on Atlas and Ubuntu 20.04.
 ```
 export CUDA=cu102
 export TORCH=1.8.1
@@ -14,16 +14,9 @@ pip install -r requirements.txt
 ```
 
 ## Preliminaries
-First, download the data. I've uploaded it on google drive at this link.  The file is 17GB. 
+First, download the data. I've uploaded it on google drive at this link. Extract it to `data/`.
 ```
-https://drive.google.com/file/d/1Iz-Ag1phSyqffWFctpVLX9yNxhYw-_8G/view?usp=sharing
-```
-
-If you'd prefer to download it from the command line, here's a script:
-```
-pip install gdown
-gdown https://drive.google.com/uc?id=1Iz-Ag1phSyqffWFctpVLX9yNxhYw-_8G
-tar -xvf deployed.tar
+https://drive.google.com/drive/folders/1HYfVlErkfJiRe17K7u3RHAt-k8_OaSjC?usp=sharing
 ```
 
 Replace all instances of `/work/awilf/` in this codebase with your top level directory (the directory just above this one).  I'm sure there's some way to do this via the command line; I use vscode for it. Clone this repository into it and name it `MTAG` (`mv mtag MTAG`), so that you have this repo as `/work/awilf/MTAG` (replace `/work/awilf/` with your top level).
@@ -34,17 +27,18 @@ https://github.com/abwilf/Standard-Grid
 https://github.com/A2Zadeh/CMU-MultimodalSDK
 ```
 
-Your top level directory (e.g. `/work/awilf`) should look something like this:
-```
-$ tree -L 1
-├── CMU-MultimodalSDK
-├── MTAG
-├── Standard-Grid
-...
-```
-
 Make sure the `deployed` folder is within `MTAG`, and now you should be able to run the program.
 ```
 git checkout het
 bash run.sh
 ```
+
+## Running the Program
+To run the `chunk` version of the program up to SOTA performance, run `bash run_chunk.sh`.  Likewise with the `word` version, run `bash run_word.sh`. 
+
+## Program Structure
+`arg_defaults.py`: contains program arguments.  These are passed in `main.py` to the `gc` (global consts) variable, which is passed all around the program.  Relatively few functions rely heavily on arguments – rather, most flags are set within the `gc` object for flexibility and speed of iteration.
+`main.py`: training loop for the different functions.
+`models/social_iq.py`: contains low level data processing code, including alignment step.  This processed code is used directly by the baseline model, and further processed for the graph approaches.
+`models/factorized.py`: this is where we construct the graphs and define the factorized model.
+

@@ -1,11 +1,5 @@
 from .common import *
 
-def s(x):
-    save_pk('hi.pk', x)
-
-def lv(x):
-    return (load_pk('hi.pk')==x).all()
-
 qa_conns = [
     # ('text', 'text_q', 'q'),
     # ('audio', 'audio_q', 'q'), 
@@ -68,7 +62,7 @@ def get_loader_solograph_chunk(ds, vad_intervals, dsname, gc):
     covarep=torch.from_numpy(ds[3][:,:,:].transpose(1,0,2))
 
     # trim to just word keys
-    word_keys = load_pk(f'{dsname}_word_keys.pk')
+    word_keys = load_pk(join(gc['data_path'], f'{dsname}_keys_word.pk'))
     idxs = ar([keys.index(elt) for elt in word_keys])
     assert (np.sort(idxs)==idxs).all(), 'word_keys are sorted differently from chunk keys'
     q = q[idxs]
@@ -319,7 +313,7 @@ def get_loader_solograph_chunk(ds, vad_intervals, dsname, gc):
         
         new_keys.append(key)
         
-    save_pk(f'{dsname}_keys.pk', new_keys)
+    save_pk(join(gc['data_path'], f'{dsname}_keys_{gc["gran"]}.pk'), new_keys)
     print('Total: ', words.shape[0])
     print('Num skipped: ', num_skipped)
     print('Num smaller: ', num_smaller_ints)
@@ -381,8 +375,6 @@ def get_loader_solograph_word(ds, vad_intervals, dsname, gc):
     print(f'Regenerating graphs for {dsname}')
     keys, intervals = ds[-2:]
     new_keys = []
-
-    save_pk(f'{dsname}_word_keys.pk', keys)
 
     q,a,inc=[torch.from_numpy(data[:]) for data in ds[0]]
     
@@ -693,7 +685,7 @@ def get_loader_solograph_word(ds, vad_intervals, dsname, gc):
             
         new_keys.append(key)
         
-    save_pk(f'{dsname}_keys_word.pk', new_keys)
+    save_pk(join(gc['data_path'], f'{dsname}_keys_{gc["gran"]}.pk'), new_keys)
     print('Total: ', words.shape[0])
     print('Num skipped: ', num_skipped)
     print('Num smaller: ', num_smaller_ints)

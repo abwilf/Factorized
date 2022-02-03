@@ -155,9 +155,9 @@ def get_bert_features(all_utterances, model_name='bert-base-uncased'):
 
 if __name__ == '__main__':
     mfa = load_json('mfa_out.json') # from /work/awilf/mfa
-    diar = load_pk('vad_intervals_squashed.pk') # from process_VAD
+    diar = load_pk('data/vad_intervals_squashed.pk') # from process_VAD
 
-    all_utterances = load_pknone('split_utterances.pk', split_words_speaker_turns, [mfa, diar])
+    all_utterances = load_pknone('data/split_utterances.pk', split_words_speaker_turns, [mfa, diar])
 
     '''
     bert_features is of form:
@@ -176,7 +176,7 @@ if __name__ == '__main__':
     ]
     '''
 
-    bert_features = load_pknone('bert_features.pk', get_bert_features, [all_utterances])
+    bert_features = load_pknone('data/bert_features.pk', get_bert_features, [all_utterances])
 
     pk = {}
     for vid in bert_features:
@@ -186,6 +186,6 @@ if __name__ == '__main__':
         }
         assert pk[vid]['features'].shape[0] == pk[vid]['intervals'].shape[0]
 
-    # pk_to_amir_csd(pk, 'bert_word_features.csd')
-    save_pk('social_unaligned_csds/bert_word_features.pk', pk)
+    # pk_to_amir_csd(pk, 'bert_word_csd.csd')
+    save_pk('data/bert_word_csd.pk', pk)
     

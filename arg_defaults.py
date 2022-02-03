@@ -51,7 +51,7 @@ defaults = [
     ("--scene_mean", int, 1), # add mean node to scene rep
     # ("--scene_agg", int, 0), # add aggregator node to scene rep
     ("--social_baseline", int, 0),
-    ("--factorized_key_subset", int, 0), # if using social baseline, whether to use full data or factorized_subset
+    ("--factorized_key_subset", int, 1), # if using social baseline, whether to use full data or factorized_subset
     ("--importancegraph", int, 0), # add aggregator node to scene rep
     ("--num_agg_nodes", int, 2), # add aggregator node to scene rep
     ("--seq_len", int, 250), # max number of words per "utterance" in subgraph - no padding b/c graph NN
@@ -98,7 +98,7 @@ defaults = [
     ("--load_model", bool, False),
     ("--save_grad", bool, False),
     ("--dataset", str, "mosi"),
-    ("--data_path", str, "/workspace/dataset/"),
+    ("--data_path", str, "/work/awilf/MTAG/data"),
     ("--log_path", str, None),
     ("--padding_len", int, -1),
     ("--include_zero", bool, True),
