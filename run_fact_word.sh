@@ -1,6 +1,6 @@
-
+# BEST FACTORIZED
 python main.py \
---bs 10 \
+--bs 1 \
 --drop_het 0 \
 --epochs 30 \
 --gat_conv_num_heads 2 \
@@ -14,6 +14,6 @@ python main.py \
 --test 0 \
 --out_dir /work/awilf/MTAG/results/factorized \
 --trials 1 \
---seq_len 25 \
---gran chunk \
---test 0
+--seq_len 150 \
+--gran word \
+--test 0 

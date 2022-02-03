@@ -32,3 +32,10 @@ factorized
 
 gdrive*.json
 *credentials*.json
+*.pk
+*.csd
+social_unaligned_csds
+*.txt
+blah.py
+*.json
+*.bak

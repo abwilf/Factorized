@@ -1,32 +1,50 @@
 {
-    // Use IntelliSense to learn about possible attributes.
-    // Hover to view descriptions of existing attributes.
-    // For more information, visit: https://go.microsoft.com/fwlink/?linkid=830387
     "version": "0.2.0",
     "configurations": [
         {
             "name": "Python: Current File",
             "type": "python",
             "request": "launch",
-            // "program": "${file}",
             "program": "main.py",
             "console": "integratedTerminal",
             "justMyCode": false,
+            "env": { "CUDA_LAUNCH_BLOCKING": "1" },
             "args": [
-                "--bs", "15",
-                "--drop_het", "0.01",
-                "--epochs", "3",
-                "--gat_conv_num_heads", "6",
-                "--global_lr", "0.001",
-                "--graph_conv_in_dim", "60",
-                "--num_gat_layers", "2",
-                "--scene_mean", "1",
-                "--solograph", "1",
-                "--solograph_test", "1",
-                "--social_baseline", "0", 
-                "--trials", "1",
-            ]    
+                "--bs",
+                "10",
+                "--drop_het",
+                "0",
+                "--epochs",
+                "30",
+                "--gat_conv_num_heads",
+                "2",
+                "--global_lr",
+                "0.001",
+                "--graph_conv_in_dim",
+                "80",
+                "--net",
+                "factorized",
+                "--num_agg_nodes",
+                "1",
+                "--num_gat_layers",
+                "2",
+                "--scene_mean",
+                "1",
+                "--social_baseline",
+                "0",
+                "--test",
+                "0",
+                "--out_dir",
+                "/work/awilf/MTAG/results/factorized",
+                "--trials",
+                "1",
+                "--seq_len",
+                "25",
+                "--gran",
+                "chunk",
+                "--test",
+                "0"
+            ]
         }
     ]
 }
-

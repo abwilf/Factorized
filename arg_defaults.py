@@ -46,11 +46,18 @@ defaults = [
     ("--hidden_dim", int, 50),
     ("--net", str, "graphqa"),
     ("--test", int, 0),
+    ("--graph_test", int, 0), # test with dummy graph
+    
     ("--scene_mean", int, 1), # add mean node to scene rep
     # ("--scene_agg", int, 0), # add aggregator node to scene rep
-    ("--social_baseline", int, 0), # add aggregator node to scene rep
+    ("--social_baseline", int, 0),
+    ("--factorized_key_subset", int, 0), # if using social baseline, whether to use full data or factorized_subset
     ("--importancegraph", int, 0), # add aggregator node to scene rep
     ("--num_agg_nodes", int, 2), # add aggregator node to scene rep
+    ("--seq_len", int, 250), # max number of words per "utterance" in subgraph - no padding b/c graph NN
+    ("--gran", str, 'chunk'), # granularity: chunk or word level alignment
+    ("--align_pres_window", int, 1), # granularity: chunk or word level alignment
+    ("--align_pastfut_window", int, 10), # granularity: chunk or word level alignment
 
     ("--use_loss_norm", int, 1),
     ("--use_all_to_all", int, 0),

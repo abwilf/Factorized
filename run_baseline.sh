@@ -1,4 +1,3 @@
-
 python main.py \
 --bs 10 \
 --drop_het 0 \
@@ -10,10 +9,10 @@ python main.py \
 --num_agg_nodes 1 \
 --num_gat_layers 2 \
 --scene_mean 1 \
---social_baseline 0 \
---test 0 \
+--social_baseline 1 \
 --out_dir /work/awilf/MTAG/results/factorized \
 --trials 1 \
 --seq_len 25 \
 --gran chunk \
---test 0
+--test 1 \
+--factorized_key_subset 1

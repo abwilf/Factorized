@@ -36,6 +36,8 @@ for mod in mods:
 NUM_QS = 6
 NUM_A_COMBS = 12
 
+tens = torch.Tensor
+
 def get_fc_edges(edges_a, edges_b):
     return torch.cat([elt[None,:] for elt in torch.meshgrid(edges_a, edges_b)]).reshape(2,-1)
 
@@ -50,8 +52,12 @@ def get_masked(arr):
 
         elif 'social' in gc['dataset']: # back padded
             # find idx of last zero element looking from back to front
-            idx = (arr==0).all(dim=-1).to(torch.long).flip(dims=[0]).argmin()
-            return arr[:-idx]
+            # edge case: if no zeros - happens a lot with 25 sequence length if we're doing word-level, not chunk-level embeddings
+            if (~(torch.Tensor(arr)==0).all(dim=-1)).all():
+                return arr
+            else:
+                idx = (arr==0).all(dim=-1).to(torch.long).flip(dims=[0]).argmin()
+                return arr[:-idx]
             
         else: 
             assert False, 'Only social, mosi, and iemocap are supported right now.  To add another dataset, break here and see whether front or back padded to seq len'

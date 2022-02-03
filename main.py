@@ -7,7 +7,6 @@ import json
 import os
 import sys
 import time
-import h5py
 from torch.optim.lr_scheduler import ReduceLROnPlateau
 from tqdm import trange, tqdm
 import numpy as np
@@ -264,7 +263,7 @@ def get_loader(ds):
         
         total_data.append(hetero_data)
 
-    loader = DataLoader(total_data, batch_size=gc['bs'], shuffle=True)
+    loader = DataLoader(total_data, batch_size=gc['bs'], shuffle=False)
     return loader
 
 
@@ -527,15 +526,6 @@ def test(loader, model, scheduler, valid):
     #     scheduler.step(mse)
     return l if l != 0 else loss, y_trues, y_preds
 
-paths={}
-# paths["QA_BERT_lastlayer_binarychoice"]="/work/awilf/Social-IQ/socialiq/SOCIAL-IQ_QA_BERT_LASTLAYER_BINARY_CHOICE.csd"
-paths["QA_BERT_lastlayer_binarychoice"]="/work/awilf/MTAG/deployed/SOCIAL-IQ_QA_BERT_LASTLAYER_BINARY_CHOICE.csd"
-paths["DENSENET161_1FPS"]="/work/awilf/MTAG/deployed/b'SOCIAL_IQ_DENSENET161_1FPS'.csd"
-paths["Transcript_Raw_Chunks_BERT"]="/work/awilf/MTAG/deployed/b'SOCIAL_IQ_TRANSCRIPT_RAW_CHUNKS_BERT'.csd"
-paths["Acoustic"]="/work/awilf/MTAG/deployed/b'SOCIAL_IQ_COVAREP'.csd"
-social_iq=mmdatasdk.mmdataset(paths)
-social_iq.unify()
-
 
 def bds_to_conns(a,b): # a is batch_dict_1, b is batch_dict_2, return all combinations of the indices that share a batch dict
     '''
@@ -614,7 +604,12 @@ def train_model_social(optimizer, use_gnn=True, exclude_vision=False, exclude_au
         from models.graphqa import get_loader_solograph, Solograph
     
     elif gc['net'] == 'factorized':
-        from models.factorized import get_loader_solograph, Solograph
+        if gc['gran'] == 'chunk':
+            from models.factorized import get_loader_solograph_chunk as get_loader_solograph
+        else:
+            from models.factorized import get_loader_solograph_word as get_loader_solograph
+            
+        from models.factorized import Solograph
     else:
         assert gc['net'] == 'factorized', f'gc[net]needs to be factorized but is {gc["net"]}'
 
@@ -633,18 +628,21 @@ def train_model_social(optimizer, use_gnn=True, exclude_vision=False, exclude_au
                 except:
                     pass
 
-        preloaded_train=process_data(trk, 'train')
-        preloaded_dev=process_data(dek, 'dev')
+        preloaded_train=process_data(trk, 'train', gc)
+        preloaded_dev=process_data(dek, 'dev', gc)
         replace_inf(preloaded_train[3])
         replace_inf(preloaded_dev[3])
 
-        vad_intervals = load_pk('/work/awilf/MTAG/vad_intervals_squashed.pk') # run process_VAD.py to get this output
+        # vad_intervals = load_pk('/work/awilf/MTAG/vad_intervals_squashed.pk') # run process_VAD.py to get this output
+        # bert_features = load_pk('bert_features.pk')
+        intervals_path = 'vad_intervals_squashed.pk' if gc['gran'] == 'chunk' else 'bert_features.pk'
+        intervals = load_pk(intervals_path)
         if gc['net'] == 'graphqa':
             train_loader = get_loader_solograph(preloaded_train, 'social_train')
             dev_loader = get_loader_solograph(preloaded_dev, 'social_dev')
         else:
-            train_loader, gc = get_loader_solograph(preloaded_train, vad_intervals, 'social_train', gc)
-            dev_loader, gc = get_loader_solograph(preloaded_dev, vad_intervals, 'social_dev', gc)
+            train_loader, gc = get_loader_solograph(preloaded_train, intervals, 'social_train', gc)
+            dev_loader, gc = get_loader_solograph(preloaded_dev, intervals, 'social_dev', gc)
         
         del preloaded_train
         del preloaded_dev
@@ -671,7 +669,7 @@ def train_model_social(optimizer, use_gnn=True, exclude_vision=False, exclude_au
         'val_accs':  [],
         'val_losses': [],
     }
-
+    
     # epochs_since_new_max = 0 # early stopping
     for i in range(gc['epochs']):
         # if epochs_since_new_max > gc['early_stopping_patience'] and i > 15: # often has a slow start
@@ -682,7 +680,10 @@ def train_model_social(optimizer, use_gnn=True, exclude_vision=False, exclude_au
 
         train_block = gc['train_block']
         for batch_i, batch in enumerate(tqdm(train_loader)):
+            # if batch_i < 710:
+                # continue
             batch = batch.to(gc['device'])
+            gc['BASELINE'] = False
 
             if batch_i == 0:
                 with torch.no_grad():  # Initialize lazy modules.
@@ -699,7 +700,34 @@ def train_model_social(optimizer, use_gnn=True, exclude_vision=False, exclude_au
             if cont:
                 continue
             
+            assert not batch['text']['x'].isnan().any()
+            assert not batch['text']['batch'].isnan().any()
+            assert not batch['text']['ptr'].isnan().any()
+
+            assert not batch['audio']['x'].isnan().any()
+            assert not batch['audio']['batch'].isnan().any()
+            assert not batch['audio']['ptr'].isnan().any()
+
+
+            assert not batch['video']['x'].isnan().any()
+            assert not batch['video']['batch'].isnan().any()
+            assert not batch['video']['ptr'].isnan().any()
+
+            edges = lkeys(batch.__dict__['_edge_store_dict'])
+
+            for (l,name,r) in edges: # check for out of bounds accesses
+                assert batch[l]['x'].shape[0] >= batch[l,name,r]['edge_index'][0,:].max()
+                assert batch[r]['x'].shape[0] >= batch[l,name,r]['edge_index'][1,:].max()
+
+            if batch_i == 142:
+                gc['BASELINE'] = True
+                gc['past_batch'] = batch
+
+            if batch_i == 143:
+                hi=2
             correct, incorrect = model(batch)
+
+            assert not (correct.isnan().any() or incorrect.isnan().any())
 
             correct_mean=Variable(torch.Tensor(numpy.array([1.0])),requires_grad=False).cuda()
             incorrect_mean=Variable(torch.Tensor(numpy.array([0.])),requires_grad=False).cuda()
@@ -777,11 +805,19 @@ def train_social_baseline(optimizer, use_gnn=True, exclude_vision=False, exclude
                     fold.remove(bad)
                 except:
                     pass
+        
+        if gc['factorized_key_subset']:
+            factorized_keys = load_pk('social_train_keys.pk') + load_pk('social_dev_keys.pk')
+            trk = lfilter(lambda elt: elt in factorized_keys, trk)
+            dek = lfilter(lambda elt: elt in factorized_keys, dek)
 
-        preloaded_train=process_data(trk, 'train')
-        preloaded_dev=process_data(dek, 'dev')
+        preloaded_train=process_data(trk, 'train', gc)
+        preloaded_dev=process_data(dek, 'dev', gc)
         replace_inf(preloaded_train[3])
         replace_inf(preloaded_dev[3])
+
+        trk = preloaded_train[-2]
+        dek = preloaded_dev[-2]
     
     q_lstm,a_lstm,t_lstm,v_lstm,ac_lstm,mfn_mem,mfn_delta1,mfn_delta2,mfn_tfn=init_tensor_mfn_modules()
     judge=get_judge().cuda()
@@ -794,11 +830,15 @@ def train_social_baseline(optimizer, use_gnn=True, exclude_vision=False, exclude
     optimizer=optim.Adam(params,lr=gc['global_lr'])
 
     metrics = {
-        'all_train_accs': [],
-        'all_train_losses': [],
-        'all_dev_accs': [],
-        'all_dev_losses': [],
+        'train_acc_best':  0,
+        'train_accs': [],
+        'train_losses': [],
+
+        'val_acc_best':  0,
+        'val_accs':  [],
+        'val_losses': [],
     }
+
 
     for i in range(gc['epochs']):
         print ("Epoch %d"%i)
@@ -810,7 +850,7 @@ def train_social_baseline(optimizer, use_gnn=True, exclude_vision=False, exclude
             this_trk=[j*bs,(j+1)*bs]
 
             q_rep,a_rep,i_rep,v_rep,t_rep,ac_rep,mfn_rep=feed_forward(this_trk,q_lstm,a_lstm,v_lstm,t_lstm,ac_lstm,mfn_mem,mfn_delta1,mfn_delta2,mfn_tfn,preloaded_train)
-                
+
             real_bs=float(q_rep.shape[0])
 
             correct=judge(torch.cat((q_rep,a_rep,i_rep,t_rep,v_rep,ac_rep,mfn_rep),1))
@@ -828,8 +868,8 @@ def train_social_baseline(optimizer, use_gnn=True, exclude_vision=False, exclude
             
         print ("Loss %f",numpy.array(losses,dtype="float32").mean())
         print ("Accs %f",numpy.array(accs,dtype="float32").mean())
-        metrics['all_train_accs'].append(numpy.array(accs,dtype="float32").mean())
-        metrics['all_train_losses'].append(numpy.array(losses,dtype="float32").mean())
+        metrics['train_accs'].append(numpy.array(accs,dtype="float32").mean())
+        metrics['train_losses'].append(numpy.array(losses,dtype="float32").mean())
 
         with torch.no_grad():
             _losses,_accs=[],[]
@@ -839,7 +879,6 @@ def train_social_baseline(optimizer, use_gnn=True, exclude_vision=False, exclude
                 this_dek=[j*bs,(j+1)*bs]
 
                 q_rep,a_rep,i_rep,v_rep,t_rep,ac_rep,mfn_rep=feed_forward(this_dek,q_lstm,a_lstm,v_lstm,t_lstm,ac_lstm,mfn_mem,mfn_delta1,mfn_delta2,mfn_tfn,preloaded_dev)
-
                 real_bs=float(q_rep.shape[0])
 
                 correct=judge(torch.cat((q_rep,a_rep,i_rep,t_rep,v_rep,ac_rep,mfn_rep),1))
@@ -855,10 +894,12 @@ def train_social_baseline(optimizer, use_gnn=True, exclude_vision=False, exclude
         print ("Dev Accs %f",numpy.array(_accs,dtype="float32").mean())
         print ("Dev Losses %f",numpy.array(_losses,dtype="float32").mean())
         print ("-----------")
-        metrics['all_dev_accs'].append(numpy.array(_accs,dtype="float32").mean())
-        metrics['all_dev_losses'].append(numpy.array(_losses,dtype="float32").mean())
+        metrics['val_accs'].append(numpy.array(_accs,dtype="float32").mean())
+        metrics['val_losses'].append(numpy.array(_losses,dtype="float32").mean())
     
     metrics['model_params'] = sum(p.numel() for p in params if p.requires_grad)
+    metrics['val_acc_best'] = max(metrics['val_accs'])
+    metrics['train_acc_best'] = max(metrics['train_accs'])
     return metrics
 
 def train_model(optimizer, use_gnn=True, exclude_vision=False, exclude_audio=False, exclude_text=False, average_mha=False, num_gat_layers=1, lr_scheduler=None, reduce_on_plateau_lr_scheduler_patience=None, reduce_on_plateau_lr_scheduler_threshold=None, multi_step_lr_scheduler_milestones=None, exponential_lr_scheduler_gamma=None, use_pe=False, use_prune=False):

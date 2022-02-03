@@ -65,3 +65,5 @@ def gdrive_down(url, out_path=None):
         url = f'https://drive.google.com/uc?id={id}'
     
     gdown.download(url, out_path)
+
+# gdrive_down('https://drive.google.com/file/d/1dAvxdsHWbtA1ZIh3Ex9DPn9Nemx9M1-L/view', out_path='/work/awilf/mfa/')

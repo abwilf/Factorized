@@ -21,12 +21,11 @@ class Collater(object):
 
     def collate(self, batch):
         elem = batch[0]
-
-        lens = [len(list(elt.edge_index_dict.keys())) for elt in batch]
-        max_idx = np.argmax(lens)
-        tmp = batch[0]
-        batch[0] = batch[max_idx]
-        batch[max_idx] = tmp
+        # lens = [len(list(elt.edge_index_dict.keys())) for elt in batch]
+        # max_idx = np.argmax(lens)
+        # tmp = batch[0]
+        # batch[0] = batch[max_idx]
+        # batch[max_idx] = tmp
 
         if isinstance(elem, Data) or isinstance(elem, HeteroData):
             ret = Batch.from_data_list(batch, self.follow_batch, self.exclude_keys)

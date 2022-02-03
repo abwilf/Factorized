@@ -1,6 +1,7 @@
 import sys
 sys.path.append('/work/awilf/CMU-MultimodalSDK')
 sys.path.append('/work/awilf/CMU-MultimodalSDK/mmsdk/mmmodelsdk/fusion')
+import sys; sys.path.append('/work/awilf/utils/'); from alex_utils import *
 import torch
 from collections import OrderedDict
 from torch.autograd import Variable
@@ -24,22 +25,95 @@ print ("Tensor-MFN code for Social-IQ")
 print ("Yellow warnings fro SDK are ok!")
 print ("If you do happen to get nans, then the reason is the most recent acoustic features update. You can replace nans and infs in acoustic at your discretion.")
 
+metadata_template = { "root name": '', "computational sequence description": '', "computational sequence version": '', "alignment compatible": '', "dataset name": '', "dataset version": '', "creator": '', "contact": '', "featureset bib citation": '', "dataset bib citation": ''}
+def get_compseq(path, key_name):
+	if 'pk' in path:
+		a = load_pk(path)
+		compseq = mmdatasdk.computational_sequence(key_name)
+		compseq.setData(a, key_name)
+		metadata_template['root name'] = key_name
+		compseq.setMetadata(metadata_template, key_name)
+	else:
+		assert 'csd' in path
+		a = mmdatasdk.mmdataset({key_name: path})
+		compseq = a[key_name]
+	return compseq
 
-#Loading the data of Social-IQ
-# #Yellow warnings fro SDK are ok!
+def get_compseq_obj(obj, key_name):
+	if type(obj) is dict:
+		compseq = mmdatasdk.computational_sequence(key_name)
+		compseq.setData(obj, key_name)
+		metadata_template['root name'] = key_name
+		compseq.setMetadata(metadata_template, key_name)
+	else:
+		compseq = obj[key_name]
+	return compseq
+
+def add_seq(dataset, obj, key_name, obj_type='path'):
+	if obj_type == 'path':
+		compseq = get_compseq(obj, key_name)
+	else:
+		compseq = get_compseq_obj(obj, key_name)
+	dataset.computational_sequences[key_name] = compseq
+
+
+def myavg(intervals,features):
+	final=numpy.average(features,axis=0)
+	if len(final.shape)==2:
+		final=numpy.average(final,axis=0)
+	return final
+
+def align():
+	#first time dl
+	#socialiq_no_align=mmdatasdk.mmdataset(mmdatasdk.socialiq.highlevel,"socialiq")
+	#second time dl
+	# socialiq_no_align=mmdatasdk.mmdataset("socialiq")
+
+	dataset = mmdatasdk.mmdataset(recipe={'dummy': 'social_unaligned_csds/dummy.csd'})
+	del dataset.computational_sequences['dummy']
+
+	if gc['gran'] == 'chunk':
+		add_seq(dataset, '/work/awilf/MTAG/blah/SOCIAL_IQ_TRANSCRIPT_RAW_CHUNKS_BERT.csd', 'Transcript_Raw_Chunks_BERT')
+	else:
+		add_seq(dataset, '/work/awilf/MTAG/social_unaligned_csds/bert_word_features.pk', 'Transcript_Raw_Chunks_BERT')
+
+	add_seq(dataset, '/work/awilf/MTAG/social_unaligned_csds/SOCIAL_IQ_COVAREP.csd', 'Acoustic')
+	add_seq(dataset, '/work/awilf/MTAG/social_unaligned_csds/SOCIAL_IQ_DENSENET161_1FPS.csd', 'DENSENET161_1FPS')
+	
+	dataset
+	# add_seq(dataset, '/work/awilf/MTAG/social_unaligned_csds/SOCIAL_IQ_COVAREP.csd')
+
+	# recipe = {
+	#     'Acoustic': '/work/awilf/MTAG/social_unaligned_csds/SOCIAL_IQ_COVAREP.csd',
+	#     'DENSENET161_1FPS': '/work/awilf/MTAG/social_unaligned_csds/SOCIAL_IQ_DENSENET161_1FPS.csd',
+	#     # 'SOCIAL_IQ_TRANSCRIPT_RAW_CHUNKS_BERT': '/work/awilf/MTAG/social_unaligned_csds/SOCIAL_IQ_TRANSCRIPT_RAW_CHUNKS_BERT.csd',
+	#     'Transcript_Raw_Chunks_BERT': '/work/awilf/MTAG/social_unaligned_csds/bert_word_features.csd',
+	# }
+	# dataset = mmdatasdk.mmdataset(recipe)
+
+	dataset.align("Transcript_Raw_Chunks_BERT",collapse_functions=[myavg])
+	dataset.impute("Transcript_Raw_Chunks_BERT")
+	dataset.revert()
+	dataset.unify()
+
+	add_seq(dataset, "/work/awilf/MTAG/deployed2/SOCIAL-IQ_QA_BERT_LASTLAYER_BINARY_CHOICE.csd", 'QA_BERT_lastlayer_binarychoice')
+	
+	return dataset
+
+# Loading the data of Social-IQ
+#Yellow warnings fro SDK are ok!
 # if os.path.isdir("/work/awilf/MTAG/deployed/") is False:
-# 	print ("Need to run the modality alignment first")
-# 	exit()
-# 	from alignment import align,myavg
-# 	align()
+#     print ("Need to run the modality alignment first")
+#     align()
+#     # exit()
  
-paths={}
-paths["QA_BERT_lastlayer_binarychoice"]="/work/awilf/MTAG/deployed/SOCIAL-IQ_QA_BERT_LASTLAYER_BINARY_CHOICE.csd"
-paths["DENSENET161_1FPS"]="/work/awilf/MTAG/deployed/b'SOCIAL_IQ_DENSENET161_1FPS'.csd"
-paths["Transcript_Raw_Chunks_BERT"]="/work/awilf/MTAG/deployed/b'SOCIAL_IQ_TRANSCRIPT_RAW_CHUNKS_BERT'.csd"
-paths["Acoustic"]="/work/awilf/MTAG/deployed/b'SOCIAL_IQ_COVAREP'.csd"
-social_iq=mmdatasdk.mmdataset(paths)
-social_iq.unify() 
+# paths={}
+# paths["QA_BERT_lastlayer_binarychoice"]="/work/awilf/MTAG/deployed/SOCIAL-IQ_QA_BERT_LASTLAYER_BINARY_CHOICE.csd"
+# paths["DENSENET161_1FPS"]="/work/awilf/MTAG/deployed/b'SOCIAL_IQ_DENSENET161_1FPS'.csd"
+# paths["Transcript_Raw_Chunks_BERT"]="/work/awilf/MTAG/deployed/b'SOCIAL_IQ_TRANSCRIPT_RAW_CHUNKS_BERT'.csd"
+# paths["Acoustic"]="/work/awilf/MTAG/deployed/b'SOCIAL_IQ_COVAREP'.csd"
+# social_iq=mmdatasdk.mmdataset(paths)
+# social_iq.unify() 
 
 
 def qai_to_tensor(in_put,keys,total_i=1):
@@ -76,7 +150,7 @@ def build_visual(visual,keys):
 	vis_features=[]
 	for i in range (len(keys)):
 		this_vis=numpy.array(visual[keys[i]]["features"])
-		this_vis=numpy.concatenate([this_vis,numpy.zeros([25,2208])],axis=0)[:25,:]
+		this_vis=numpy.concatenate([this_vis,numpy.zeros([gc['seq_len'],2208])],axis=0)[:gc['seq_len'],:]
 		vis_features.append(this_vis)
 	return numpy.array(vis_features,dtype="float32").transpose(1,0,2)
 
@@ -85,7 +159,7 @@ def build_acc(acoustic,keys):
 	for i in range (len(keys)):
 		this_acc=numpy.array(acoustic[keys[i]]["features"])
 		numpy.nan_to_num(this_acc)
-		this_acc=numpy.concatenate([this_acc,numpy.zeros([25,74])],axis=0)[:25,:]
+		this_acc=numpy.concatenate([this_acc,numpy.zeros([gc['seq_len'],74])],axis=0)[:gc['seq_len'],:]
 		acc_features.append(this_acc)
 	final=numpy.array(acc_features,dtype="float32").transpose(1,0,2)
 	return numpy.array(final,dtype="float32")
@@ -95,25 +169,36 @@ def build_trs(trs,keys):
 	trs_features=[]
 	for i in range (len(keys)):
 		this_trs=numpy.array(trs[keys[i]]["features"][:,-768:])
-		this_trs=numpy.concatenate([this_trs,numpy.zeros([25,768])],axis=0)[:25,:]
+		this_trs=numpy.concatenate([this_trs,numpy.zeros([gc['seq_len'],768])],axis=0)[:gc['seq_len'],:]
 		trs_features.append(this_trs)
 	return numpy.array(trs_features,dtype="float32").transpose(1,0,2)
  
-def process_data(keys, name):
-	save_path = f'/work/awilf/MTAG/{name}_social.pk'
+gc = {}
+social_iq = None
+def process_data(keys, name, _gc):
+	global gc,social_iq # need for seq_len; so we don't reprocess
+	gc = _gc
+
+	save_path = f'/work/awilf/MTAG/{name}_social_{gc["gran"]}_{gc["seq_len"]}.pk'
 	res = load_pk(save_path)
 	if res is None:
+	# if True:
+		if social_iq is None:
+			social_iq = align()
 		print(f'Building and writing processed data for {save_path}')
 		qa_glove=social_iq["QA_BERT_lastlayer_binarychoice"]
 		visual=social_iq["DENSENET161_1FPS"]
 		transcript=social_iq["Transcript_Raw_Chunks_BERT"]
 		acoustic=social_iq["Acoustic"]
+		
+		if gc['gran'] != 'chunk':
+			keys = [elt for elt in keys if elt in transcript.keys()] # filter b/c missing some word-level
 
 		qas=build_qa_binary(qa_glove,keys)
 		visual=build_visual(visual,keys)
 		trs=build_trs(transcript,keys)	
 		acc=build_acc(acoustic,keys)
-		intervals=[numpy.array(social_iq["Transcript_Raw_Chunks_BERT"][key]['intervals']) for key in keys]
+		intervals=[numpy.array(social_iq["Transcript_Raw_Chunks_BERT"][key]['intervals'])[:gc['seq_len']] for key in keys]
 		res = qas,visual,trs,acc,keys,intervals
 		save_pk(save_path, res)
 	else:
@@ -132,14 +217,12 @@ def calc_accuracy(correct,incorrect):
 	return numpy.array(correct_>incorrect_,dtype="float32").sum()/correct.shape[0]
 
 def feed_forward(keys,q_lstm,a_lstm,v_lstm,t_lstm,ac_lstm,mfn_mem,mfn_delta1,mfn_delta2,mfn_tfn,preloaded_data=None):
-
 	q,a,i=[data[keys[0]:keys[1]] for data in preloaded_data[0]]
 	vis=preloaded_data[1][:,keys[0]:keys[1],:]
 	trs=preloaded_data[2][:,keys[0]:keys[1],:]
 	acc=preloaded_data[3][:,keys[0]:keys[1],:]
 
 	reference_shape=q.shape
-
 	q_rep=q_lstm.step(to_pytorch(flatten_qail(q)))[1][0][0,:,:]
 	a_rep=a_lstm.step(to_pytorch(flatten_qail(a)))[1][0][0,:,:]
 	i_rep=a_lstm.step(to_pytorch(flatten_qail(i)))[1][0][0,:,:]
@@ -191,29 +274,6 @@ def init_tensor_mfn_modules():
 
 	mfn_tfn=TensorFusion([50,20,20],100).cuda()
 	return q_lstm,a_lstm,t_lstm,v_lstm,ac_lstm,mfn_mem,mfn_delta1,mfn_delta2,mfn_tfn
-	
-import pickle
-def load_pk(file_stub):
-    filename = file_stub
-    if not os.path.exists(filename):
-        return None
-    try:
-        with open(filename, 'rb') as f:
-            obj = pickle.load(f)
-            return obj
-    except:
-        return load_pk_old(filename)
-
-def load_pk_old(filename):
-    with open(filename, 'rb') as f:
-        u = pickle._Unpickler(f)
-        u.encoding = 'latin1'
-        p = u.load()
-        return p
-
-def save_pk(file_stub, pk, protocol=4):
-    with open(file_stub, 'wb') as f:
-        pickle.dump(pk, f, protocol=protocol)
 
 def replace_inf(arr):
 	arr[arr==-numpy.inf]=numpy.isfinite(arr).min()
