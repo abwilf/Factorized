@@ -18,13 +18,13 @@ class MosiDataset(Data.Dataset):
     testset = MultimodalSubdata("test")
     validset = MultimodalSubdata("valid")
 
-    def __init__(self, root, clas="train"):
+    def __init__(self, root, gc, clas="train"):
         self.root = root
         self.clas = clas
         if len(MosiDataset.trainset.y) != 0 and clas != "train":
             print("Data has been previously loaded, fetching from previous lists.")
         else:
-            self.load_data()
+            self.load_data(gc)
 
         if self.clas == "train":
             self.dataset = MosiDataset.trainset
@@ -39,7 +39,7 @@ class MosiDataset(Data.Dataset):
         self.y = self.dataset.y
 
 
-    def load_data(self):
+    def load_data(self,gc):
         if gc['data_path'][-1] != '/':
             gc['data_path'] = gc['data_path'] + '/'
         dataset = pickle.load(open(gc['data_path'] + 'mosi_data.pkl', 'rb'))
@@ -56,6 +56,7 @@ class MosiDataset(Data.Dataset):
             ds.audio = ds.audio.clone().cpu().detach()
             ds.vision = torch.tensor(dataset[split_type]['vision'].astype(np.float32)).cpu().detach()
             ds.y = torch.tensor(dataset[split_type]['labels'].astype(np.float32)).cpu().detach()
+            ds.ids = dataset[split_type]['id'][:,0].reshape(-1)
 
     def __getitem__(self, index):
         inputLen = len(self.text[index])

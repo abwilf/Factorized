@@ -14,11 +14,6 @@ from sklearn.metrics import accuracy_score, f1_score, confusion_matrix
 import gc as g
 from graph_model.iemocap_inverse_sample_count_ce_loss import IEMOCAPInverseSampleCountCELoss
 from model import NetMTGATAverageUnalignedConcatMHA
-from dataset.MOSEI_dataset import MoseiDataset
-from dataset.MOSEI_dataset_unaligned import MoseiDatasetUnaligned
-from dataset.MOSI_dataset import MosiDataset
-from dataset.MOSI_dataset_unaligned import MosiDatasetUnaligned
-from dataset.IEMOCAP_dataset import IemocapDatasetUnaligned, IemocapDataset
 import logging
 import util
 import pathlib
@@ -32,6 +27,7 @@ from models.alex_utils import *
 from models.common import *
 from models.graph_builder import construct_time_aware_dynamic_graph, build_time_aware_dynamic_graph_uni_modal, build_time_aware_dynamic_graph_cross_modal
 from models.global_const import gc
+from models.mosi import*
 
 SG_PATH = '/work/awilf/Standard-Grid'
 import sys
@@ -43,19 +39,7 @@ from sklearn.metrics import accuracy_score
 
 SEEDS = list(range(100))
 
-dataset_map = {
-    'mosi': MosiDataset,
-    'mosi_unaligned': MosiDatasetUnaligned,
-    'mosei': MoseiDataset,
-    'mosei_unaligned': MoseiDatasetUnaligned,
-    'iemocap_unaligned': IemocapDatasetUnaligned,
-    'iemocap': IemocapDataset,
-}
-
 ie_emos = ["Neutral", "Happy", "Sad", "Angry"]
-
-def multiclass_acc(preds, truths):
-    return np.sum(np.round(preds) == np.round(truths)) / float(len(truths))
 
 def count_params(model): 
     return sum(p.numel() for p in model.parameters() if p.requires_grad)
@@ -375,13 +359,16 @@ if __name__ == "__main__":
     get_arguments() # updates gc
 
     assert gc['dataroot'] is not None, "You havn't provided the dataset path! Use the default one."
-    assert gc['task'] in ['mosi', 'mosei', 'mosi_unaligned', 'mosei_unaligned', 'iemocap', 'iemocap_unaligned', 'social_unaligned'], "Unsupported task. Should be either mosi or mosei"
+    # assert gc['task'] in ['mosi', 'mosei', 'mosi_unaligned', 'mosei_unaligned', 'iemocap', 'iemocap_unaligned', 'social_unaligned'], "Unsupported task. Should be either mosi or mosei"
+    # gc['dataset'] = gc['task']
     gc['data_path'] = gc['dataroot']
-    gc['dataset'] = gc['task']
 
     start_time = time.time()
     
-    if gc['social_baseline']:
+    if 'mosi' in gc['dataset']:
+        train_fn = train_model_mosi
+
+    elif gc['social_baseline']:
         train_fn = train_social_baseline
     else:
         train_fn = train_model_social

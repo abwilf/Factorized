@@ -88,7 +88,7 @@ defaults = [
 
 
         # Other settings, these are likely to be fixed all the time
-    ("--task", str, 'social_unaligned'),
+    # ("--task", str, 'social_unaligned'),
     ("--dataroot", str, '/work/awilf/MTAG/data'),
     ("--log_dir", str, '/work/awilf/MTAG/debug'),
     ("--eval", bool, False),

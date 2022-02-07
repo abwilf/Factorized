@@ -1,5 +1,25 @@
+from .common import *
+from .dataset.MOSEI_dataset import MoseiDataset
+from .dataset.MOSEI_dataset_unaligned import MoseiDatasetUnaligned
+from .dataset.MOSI_dataset import MosiDataset
+from .dataset.MOSI_dataset_unaligned import MosiDatasetUnaligned
+from .dataset.IEMOCAP_dataset import IemocapDatasetUnaligned, IemocapDataset
+from sklearn.metrics import accuracy_score,f1_score
+
 ## TODO integrate this into main.py structure to get working on MOSI / MOSEI.
 ## NOTE: This code is NOT integrated with the rest of the project yet.  This is legacy code from a previous experiment. 
+
+def multiclass_acc(preds, truths):
+    return np.sum(np.round(preds) == np.round(truths)) / float(len(truths))
+
+dataset_map = {
+    'mosi': MosiDataset,
+    'mosi_unaligned': MosiDatasetUnaligned,
+    'mosei': MoseiDataset,
+    'mosei_unaligned': MoseiDatasetUnaligned,
+    'iemocap_unaligned': IemocapDatasetUnaligned,
+    'iemocap': IemocapDataset,
+}
 
 class MosiModel(torch.nn.Module):
     def __init__(self, hidden_channels, out_channels, num_layers):
@@ -35,35 +55,35 @@ class HeteroGNN(torch.nn.Module):
         self.convs = torch.nn.ModuleList()
 
         for i in range(num_layers):
-            # conv = HeteroConv({
-            #     conn_type: GATv2Conv(gc['graph_conv_in_dim'], hidden_channels//self.heads, heads=self.heads)
-            #     for conn_type in all_connections
-            # }, aggr='mean')
+            conv = HeteroConv({
+                conn_type: GATv2Conv(gc['graph_conv_in_dim'], hidden_channels//self.heads, heads=self.heads)
+                for conn_type in all_connections
+            }, aggr='mean')
             
 
-            # UNCOMMENT FOR PARAMETER SHARING
-            mods_seen = {} # mapping from mod to the gatv3conv linear layer for it
-            d = {}
-            for conn_type in all_connections:
-                mod_l, _, mod_r = conn_type
+            # # UNCOMMENT FOR PARAMETER SHARING
+            # mods_seen = {} # mapping from mod to the gatv3conv linear layer for it
+            # d = {}
+            # for conn_type in all_connections:
+            #     mod_l, _, mod_r = conn_type
 
-                lin_l = None if mod_l not in mods_seen else mods_seen[mod_l]
-                lin_r = None if mod_r not in mods_seen else mods_seen[mod_r]
+            #     lin_l = None if mod_l not in mods_seen else mods_seen[mod_l]
+            #     lin_r = None if mod_r not in mods_seen else mods_seen[mod_r]
 
-                _conv =  GATv3Conv(
-                    lin_l,
-                    lin_r,
-                    gc['graph_conv_in_dim'], 
-                    hidden_channels//self.heads,
-                    heads=self.heads
-                )
-                if mod_l not in mods_seen:
-                    mods_seen[mod_l] = _conv.lin_l
-                if mod_r not in mods_seen:
-                    mods_seen[mod_r] = _conv.lin_r
-                d[conn_type] = _conv
+            #     _conv =  GATv3Conv(
+            #         lin_l,
+            #         lin_r,
+            #         gc['graph_conv_in_dim'], 
+            #         hidden_channels//self.heads,
+            #         heads=self.heads
+            #     )
+            #     if mod_l not in mods_seen:
+            #         mods_seen[mod_l] = _conv.lin_l
+            #     if mod_r not in mods_seen:
+            #         mods_seen[mod_r] = _conv.lin_r
+            #     d[conn_type] = _conv
             
-            conv = HeteroConv(d, aggr='mean')
+            # conv = HeteroConv(d, aggr='mean')
 
             self.convs.append(conv)
 
@@ -116,18 +136,12 @@ class HeteroGNN(torch.nn.Module):
         x = scatter_mean(x,batch_dicts, dim=0)
         return x
 
-
-
-def train(train_loader, model, optimizer):
+def train_mosi(train_loader, model, optimizer):
     total_loss, total_examples = 0,0
     y_trues = []
     y_preds = []
     model.train()
-    if 'iemocap' in gc['dataset']:
-        criterion = IEMOCAPInverseSampleCountCELoss()
-        criterion.to(gc['device'])
-    else: # mosi
-        criterion = nn.SmoothL1Loss()
+    criterion = nn.SmoothL1Loss()
     for batch_i, data in enumerate(tqdm(train_loader)): # need index to prune edges
         if 'iemocap' in gc['dataset']:
             data.y = data.y.reshape(-1,4)
@@ -180,7 +194,7 @@ def train(train_loader, model, optimizer):
     return total_loss / total_examples, y_trues, y_preds
 
 @torch.no_grad()
-def test(loader, model, scheduler, valid):
+def test_mosi(loader, model):
     y_trues = []
     y_preds = []
     ids = []
@@ -196,8 +210,8 @@ def test(loader, model, scheduler, valid):
         if cont:
             continue
 
-        if 'aiEXnCPZubE_24' in data.id:
-            a=2
+        # if 'aiEXnCPZubE_24' in data.id:
+        #     a=2
         data = data.to(gc['device'])
         if 'iemocap' in gc['dataset']:
             data.y = data.y.reshape(-1,4)
@@ -214,7 +228,7 @@ def test(loader, model, scheduler, valid):
         
         y_trues.extend(y_true)
         y_preds.extend(y_pred)
-        ids.extend(data.id)
+        # ids.extend(data.id)
 
         del data
         del out
@@ -225,18 +239,127 @@ def test(loader, model, scheduler, valid):
 
 
 
+def get_loader(ds):
+    words = ds[:][0]
+    covarep = ds[:][1]
+    facet = ds[:][2]
 
-def train_model(optimizer, use_gnn=True, exclude_vision=False, exclude_audio=False, exclude_text=False, average_mha=False, num_gat_layers=1, lr_scheduler=None, reduce_on_plateau_lr_scheduler_patience=None, reduce_on_plateau_lr_scheduler_threshold=None, multi_step_lr_scheduler_milestones=None, exponential_lr_scheduler_gamma=None, use_pe=False, use_prune=False):
-    assert lr_scheduler in ['reduce_on_plateau', 'exponential', 'multi_step',
-                            None], 'LR scheduler can only be [reduce_on_plateau, exponential, multi_step]!'
+    if 'social' in gc['dataset']:
+        q,a,inc=[torch.from_numpy(data[:]) for data in ds[0]]
+        facet=torch.from_numpy(ds[1][:,:,:].transpose(1,0,2))
+        words=torch.from_numpy(ds[2][:,:,:].transpose(1,0,2))
+        covarep=torch.from_numpy(ds[3][:,:,:].transpose(1,0,2))
 
+    total_data = []
+    for i in range(words.shape[0]):
+        data = {
+            'text': get_masked(words[i]),
+            'audio': get_masked(covarep[i]),
+            'video': get_masked(facet[i]),
+        }
+
+        if gc['zero_out_video']:
+            data['video'][:]=0
+        if gc['zero_out_audio']:
+            data['audio'][:]=0
+        if gc['zero_out_text']:
+            data['text'][:]=0
+        
+        if sum([len(v) for v in data.values()]) == 0:
+            continue
+        
+        hetero_data = { k: {'x': v} for k,v in data.items()}
+        
+        data = {
+            **data,
+            'text_idx': torch.arange(data['text'].shape[0]),
+            'audio_idx': torch.arange(data['audio'].shape[0]),
+            'video_idx': torch.arange(data['video'].shape[0]),
+        }
+        
+        for mod in mods:
+            ret = build_time_aware_dynamic_graph_uni_modal(data[f'{mod}_idx'],[], [], 0, all_to_all=gc['use_all_to_all'], time_aware=True, type_aware=True)
+            
+            if len(ret) == 0: # no data for this modality
+                continue
+            elif len(ret) == 1:
+                data[mod, 'pres', mod] = ret[0]
+            else:
+                data[mod, 'pres', mod], data[mod, 'fut', mod], data[mod, 'past', mod] = ret
+
+            for mod2 in [modx for modx in mods if modx != mod]: # other modalities
+                ret = build_time_aware_dynamic_graph_cross_modal(data[f'{mod}_idx'],data[f'{mod2}_idx'], [], [], 0, time_aware=True, type_aware=True)
+                
+                if len(ret) == 0:
+                    continue
+                if len(ret) == 2: # one modality only has one element
+                    if len(data[f'{mod}_idx']) > len(data[f'{mod2}_idx']):
+                        data[mod2, 'pres', mod], data[mod, 'pres', mod2] = ret
+                    else:
+                        data[mod, 'pres', mod2], data[mod2, 'pres', mod] = ret
+                
+                else:
+                    if len(data[f'{mod}_idx']) > len(data[f'{mod2}_idx']): # the output we care about is the "longer" sequence
+                        ret = ret[3:]
+                    else:
+                        ret = ret[:3]
+
+                    data[mod, 'pres', mod2], data[mod, 'fut', mod2], data[mod, 'past', mod2] = ret
+        
+        # quick assertions
+        # for mod in mods:
+        #     assert isinstance(data[mod], torch.Tensor)
+        #     for mod2 in [modx for modx in mods if modx != mod]:
+        #         if (mod, 'fut', mod2) in data:
+        #             assert (data[mod, 'fut', mod2].flip(dims=[0]) == data[mod2, 'past', mod]).all()
+        #             assert isinstance(data[mod, 'fut', mod2], torch.Tensor) and isinstance(data[mod, 'past', mod2], torch.Tensor) and isinstance(data[mod, 'pres', mod2], torch.Tensor)
+
+        hetero_data = {
+            **hetero_data,
+            **{k: {'edge_index': v} for k,v in data.items() if isinstance(k, tuple) }
+        }
+        if 'social' in gc['dataset']:
+            if gc['graph_qa']:
+                hetero_data = {
+                    **hetero_data,
+                    'q': {'x': q[i]},
+                    'a': {'x': a[i]},
+                    'inc': {'x': inc[i]},
+                }
+
+            hetero_data = {
+                **hetero_data,
+                'q': q[i],
+                'a': a[i],
+                'inc': inc[i],
+                'vis': facet[i],
+                'trs': words[i],
+                'acc': covarep[i],
+            }
+        
+            if gc['qa_strat']==1:
+                hi=2
+
+        hetero_data = HeteroData(hetero_data)
+        
+        # hetero_data = T.AddSelfLoops()(hetero_data) # todo: include this as a HP to see if it does anything!
+        if 'social' not in gc['dataset']:
+            hetero_data.y = ds[i][-1]
+            # hetero_data.id = ds.ids[i]
+        
+        total_data.append(hetero_data)
+
+    loader = DataLoader(total_data, batch_size=gc['bs'], shuffle=True)
+    return loader
+
+def train_model_mosi():
     checkpoint_dir = 'checkpoints'
     if not os.path.exists(checkpoint_dir):
         os.mkdir(checkpoint_dir)
     ds = dataset_map[gc['dataset']]
-    train_dataset = ds(gc['data_path'], clas="train")
-    test_dataset = ds(gc['data_path'], clas="test")
-    valid_dataset = ds(gc['data_path'], clas="valid")
+    train_dataset = ds(gc['data_path'],gc,  clas="train")
+    test_dataset = ds(gc['data_path'], gc, clas="test")
+    valid_dataset = ds(gc['data_path'],gc,  clas="valid")
 
     train_loader, train_labels = get_loader(train_dataset), train_dataset[:][-1]
     valid_loader, valid_labels = get_loader(valid_dataset), valid_dataset[:][-1]
@@ -253,31 +376,32 @@ def train_model(optimizer, use_gnn=True, exclude_vision=False, exclude_audio=Fal
         betas=(gc['beta1'], gc['beta2']),
         eps=gc['eps']
     )
-    scheduler = ReduceLROnPlateau(optimizer, factor=0.5, patience=10, threshold=.002)
+    # scheduler = ReduceLROnPlateau(optimizer, factor=0.5, patience=10, threshold=.002)
 
     eval_fns = {
         'mosi_unaligned': eval_mosi_mosei,
+        'mosi': eval_mosi_mosei,
         'mosei_unaligned': eval_mosi_mosei,
         'iemocap_unaligned': eval_iemocap,
     }
     eval_fn = eval_fns[gc['dataset']]
 
-    best_valid_ie_f1s = {emo: 0 for emo in ie_emos}
-    best_test_ie_f1s = {emo: 0 for emo in ie_emos}
+    # best_valid_ie_f1s = {emo: 0 for emo in ie_emos}
+    # best_test_ie_f1s = {emo: 0 for emo in ie_emos}
     best = { 'mae': 0, 'corr': 0, 'acc_2': 0, 'acc_7': 0, 'ex_zero_acc': 0, 'f1_raven': 0, 'f1_mult': 0, }
     valid_best = { 'mae': 0, 'corr': 0, 'acc_2': 0, 'acc_7': 0, 'ex_zero_acc': 0, 'f1_raven': 0, 'f1_mult': 0, }
 
 
     for epoch in range(gc['epochs']):
-        loss, y_trues_train, y_preds_train = train(train_loader, model, optimizer)
+        loss, y_trues_train, y_preds_train = train_mosi(train_loader, model, optimizer)
         train_res = eval_fn('train', y_preds_train, y_trues_train)
 
-        valid_loss, y_trues_valid, y_preds_valid = test(valid_loader, model, scheduler, valid=True)
+        valid_loss, y_trues_valid, y_preds_valid = test_mosi(valid_loader, model)
         valid_res = eval_fn('valid', y_preds_valid, y_trues_valid)
         
         if epoch == 10:
             a=2
-        test_loss, y_trues_test, y_preds_test = test(test_loader, model, scheduler, valid=False)
+        test_loss, y_trues_test, y_preds_test = test_mosi(test_loader, model)
         test_res = eval_fn('test', y_preds_test, y_trues_test)
 
         if 'iemocap' in gc['dataset']:
