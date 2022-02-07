@@ -97,7 +97,7 @@ defaults = [
     ("--single_gpu", bool, True),
     ("--load_model", bool, False),
     ("--save_grad", bool, False),
-    ("--dataset", str, "mosi"),
+    ("--dataset", str, "social_unaligned"),
     ("--data_path", str, "/work/awilf/MTAG/data"),
     ("--log_path", str, None),
     ("--padding_len", int, -1),
