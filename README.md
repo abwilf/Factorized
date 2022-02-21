@@ -27,13 +27,12 @@ https://github.com/abwilf/Standard-Grid
 https://github.com/A2Zadeh/CMU-MultimodalSDK
 ```
 
-Make sure the `deployed` folder is within `MTAG`, and now you should be able to run the program.
+## Running the Program
+First make sure you're on the right branch.
 ```
 git checkout het
-bash run.sh
 ```
 
-## Running the Program
 To run the `chunk` version of the program up to SOTA performance, run `bash run_chunk.sh`.  Likewise with the `word` version, run `bash run_word.sh`. 
 
 To run on mosi, use `bash run_mosi.py`. 
