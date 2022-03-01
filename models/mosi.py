@@ -5,6 +5,11 @@ from .dataset.MOSI_dataset import MosiDataset
 from .dataset.MOSI_dataset_unaligned import MosiDatasetUnaligned
 from .dataset.IEMOCAP_dataset import IemocapDatasetUnaligned, IemocapDataset
 from sklearn.metrics import accuracy_score,f1_score
+from .densenet import get_densenet_features
+
+import sys; sys.path.append('/work/awilf/CMU-MultimodalSDK')
+from mmsdk import mmdatasdk
+
 
 ## TODO integrate this into main.py structure to get working on MOSI / MOSEI.
 ## NOTE: This code is NOT integrated with the rest of the project yet.  This is legacy code from a previous experiment. 
@@ -352,14 +357,118 @@ def get_loader(ds):
     loader = DataLoader(total_data, batch_size=gc['bs'], shuffle=True)
     return loader
 
+def avg(intervals: np.array, features: np.array) -> np.array:
+    try:
+        return np.average(features, axis=0)
+    except:
+        return features
+
+def process_utt_id(utt_id):
+    '''
+    once segmented, the data will be in utterance ids such as this: zhpQh]gh[pa_KU[33].  Sometimes they
+    contain brackets in the video id too, so getting the video and utterance id can be tricky.  That's what this returns:
+    e.g.
+    zhpQh]gh[pa_KU, 33
+    '''
+    return utt_id.rsplit('[',1)[0], int(utt_id.rsplit('[',1)[1].replace(']',''))
+
+def postprocess_utt_id(utt_id):
+    '''
+    get to vidid_uttid form
+    '''
+    return '_'.join(lmap(str, process_utt_id(utt_id)))
+
+def raw_to_csd():
+    # video to csd
+    if gc['video_feat'] == 'densenet':
+        video_save_path = join(gc["csd_data"], f'{gc["video_feat"]}.pk')
+        all_videos = join(gc['raw_data'], 'video')
+        get_densenet_features(all_videos, desired_fps=1, temp_save_path=video_save_path)
+    
+def csd_to_processed():
+    orig = pickle.load(open(join(gc['proc_data'],'mosi_data.pkl.bak'), 'rb'))
+
+    ds_save_path = join(gc['proc_data'], f'mosi_data_{gc["seq_len"]}.pk')
+    
+    new_dataset = load_pk(ds_save_path)
+    if new_dataset is None:
+        dataset = mmdatasdk.mmdataset(recipe={'dummy': join(gc['csd_data'], 'dummy.csd')})
+        del dataset.computational_sequences['dummy']
+
+        video_save_path = join(gc["csd_data"], f'{gc["video_feat"]}.pk')
+        if gc['video_feat'] == 'facet':
+            video_save_path = video_save_path.replace('.pk', '.csd')
+        add_seq(dataset, video_save_path, 'video')
+
+        add_seq(dataset, join(gc["csd_data"], f'{gc["text_feat"]}.csd'), 'text')
+        add_seq(dataset, join(gc["csd_data"], f'{gc["audio_feat"]}.csd'), 'audio')
+        
+        dataset.align('text', collapse_functions=[avg])
+        dataset.impute('text')
+        add_seq(dataset, join(gc["csd_data"], 'labels.csd'), 'labels')
+        dataset.align('labels')
+        dataset.hard_unify()
+
+        # add ids
+        data = {}
+        for key in np.sort(arlist(dataset['labels'].keys())):
+            new_key = postprocess_utt_id(key)
+            data[key] = {
+                'features': np.array([[new_key, *ar(dataset['labels'][key]['intervals']).reshape(-1)]]),
+                'intervals': ar(dataset['labels'][key]['intervals'])
+            }
+        compseq = mmdatasdk.computational_sequence('id')
+        compseq.setData(data, 'id')
+        metadata_template['root name'] = 'id'
+        compseq.setMetadata(metadata_template, 'id')
+        dataset.computational_sequences['id'] = compseq
+
+        splits = [
+            ('train', mmdatasdk.cmu_mosi.standard_folds.standard_train_fold),
+            ('valid', mmdatasdk.cmu_mosi.standard_folds.standard_valid_fold),
+            ('test', mmdatasdk.cmu_mosi.standard_folds.standard_test_fold),
+        ]
+        new_dataset = dataset.get_tensors(
+            seq_len=gc['seq_len'],
+            non_sequences=['labels', 'id'],
+            direction=False,
+            folds=lzip(*splits)[1],
+        )
+
+        # convert to same format as expected
+        new_dataset = {
+            split: new_dataset[i]
+            for i,split in enumerate(lzip(*splits)[0])
+        }
+        for split in lzip(*splits)[0]:
+            new_dataset[split]['id'] = new_dataset[split]['id'].squeeze().astype('bytes')
+        
+        save_pk(ds_save_path, new_dataset)
+
+    return new_dataset
+
+# def raw_to_csd():
+#     def get_densenet_features(video_dir, desired_fps=1):
+#     get_densenet_features(gc['raw_data'])
+    
+#     # get densenet features into csd
+
+
 def train_model_mosi():
+    
+    raw_to_csd()
+    dataset = csd_to_processed()
+    
+    # write this to mosi_data.pkl
+    save_pk(join(gc['proc_data'],'mosi_data.pkl'), dataset)
+
     checkpoint_dir = 'checkpoints'
     if not os.path.exists(checkpoint_dir):
         os.mkdir(checkpoint_dir)
     ds = dataset_map[gc['dataset']]
-    train_dataset = ds(gc['data_path'],gc,  clas="train")
-    test_dataset = ds(gc['data_path'], gc, clas="test")
-    valid_dataset = ds(gc['data_path'],gc,  clas="valid")
+    train_dataset = ds(gc['proc_data'],gc,  clas="train")
+    test_dataset = ds(gc['proc_data'], gc, clas="test")
+    valid_dataset = ds(gc['proc_data'],gc,  clas="valid")
 
     train_loader, train_labels = get_loader(train_dataset), train_dataset[:][-1]
     valid_loader, valid_labels = get_loader(valid_dataset), valid_dataset[:][-1]

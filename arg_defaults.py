@@ -1,6 +1,6 @@
 defaults = [
     ("--optimizer", str, 'adamw'),
-    ("--exclude_vision", bool, False),
+    ("--exclude_video", bool, False),
     ("--exclude_audio", bool, False),
     ("--exclude_text", bool, False),
     ("--bs", int, 15),
@@ -17,12 +17,12 @@ defaults = [
     ("--num_modality", int, 3),
     ("--num_frames", int, 50),
     ("--temporal_connectivity_order", int, 5),
-    ("--num_vision_aggr", int, 1),
+    ("--num_video_aggr", int, 1),
     ("--num_text_aggr", int, 1),
     ("--num_audio_aggr", int, 1),
     ("--text_dim", int, 300),
     ("--audio_dim", int, 5),
-    ("--vision_dim", int, 20),
+    ("--video_dim", int, 20),
     ("--graph_conv_in_dim", int, 64),
     ("--graph_conv_out_dim", int, 512),
     ("--use_same_graph_in_out_dim", int, 0),
@@ -59,6 +59,12 @@ defaults = [
     ("--align_pres_window", int, 1), # granularity: chunk or word level alignment
     ("--align_pastfut_window", int, 10), # granularity: chunk or word level alignment
 
+
+    ("--text_feat", str, "glove"), # which features to use for text input in alignment
+    ("--audio_feat", str, "covarep"),
+    ("--video_feat", str, "densenet"),
+
+
     ("--use_loss_norm", int, 1),
     ("--use_all_to_all", int, 0),
     ("--checkpoints", str, '9,12,15,20'),
@@ -88,8 +94,6 @@ defaults = [
 
 
         # Other settings, these are likely to be fixed all the time
-    # ("--task", str, 'social_unaligned'),
-    ("--dataroot", str, '/work/awilf/MTAG/data'),
     ("--log_dir", str, '/work/awilf/MTAG/debug'),
     ("--eval", bool, False),
     ("--resume_pt", str, None),
@@ -97,7 +101,7 @@ defaults = [
     ("--single_gpu", bool, True),
     ("--load_model", bool, False),
     ("--save_grad", bool, False),
-    ("--dataset", str, "social_unaligned"),
+    ("--dataset", str, "social"),
     ("--data_path", str, "/work/awilf/MTAG/data"),
     ("--log_path", str, None),
     ("--padding_len", int, -1),

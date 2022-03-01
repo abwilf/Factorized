@@ -97,3 +97,43 @@ class PositionalEncoding(nn.Module):
         pe_rel = torch.cat([self.pe[:count,:] for count in counts])
         x = x + pe_rel.to(gc['device'])
         return self.dropout(x)
+
+
+
+metadata_template = { "root name": '', "computational sequence description": '', "computational sequence version": '', "alignment compatible": '', "dataset name": '', "dataset version": '', "creator": '', "contact": '', "featureset bib citation": '', "dataset bib citation": ''}
+
+def get_compseq(path, key_name):
+    '''
+    python object in .pk or .pkl file or csd file to csd object in python
+    '''
+    if 'pk' in path:
+        a = load_pk(path)
+        compseq = mmdatasdk.computational_sequence(key_name)
+        compseq.setData(a, key_name)
+        metadata_template['root name'] = key_name
+        compseq.setMetadata(metadata_template, key_name)
+    else:
+        assert 'csd' in path
+        a = mmdatasdk.mmdataset({key_name: path})
+        compseq = a[key_name]
+    return compseq
+
+def get_compseq_obj(obj, key_name):
+    '''python object to compseq'''
+    if type(obj) is dict:
+        compseq = mmdatasdk.computational_sequence(key_name)
+        compseq.setData(obj, key_name)
+        metadata_template['root name'] = key_name
+        compseq.setMetadata(metadata_template, key_name)
+    else:
+        compseq = obj[key_name]
+    return compseq
+
+def add_seq(dataset, obj, key_name, obj_type='path'):
+    if obj_type == 'path':
+        compseq = get_compseq(obj, key_name)
+    else:
+        compseq = get_compseq_obj(obj, key_name)
+    dataset.computational_sequences[key_name] = compseq
+
+

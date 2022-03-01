@@ -13,7 +13,7 @@ python main.py \
 --out_dir /work/awilf/MTAG/results/factorized \
 --trials 1 \
 --seq_len 25 \
---dataset social_unaligned \
+--dataset social \
 --gran chunk \
 --test 0 \
 --zero_out_video 0 \

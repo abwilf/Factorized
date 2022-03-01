@@ -115,7 +115,11 @@ def csd_to_pk(ds, path=None):
 def amir_csd_to_pk(path):
     with h5py.File(path, 'r') as f:
         rootname = path.split('/')[-1].replace('.csd', '')
-        ds = f[rootname]['data']
+        try:
+            ds = f[rootname]['data']
+        except:
+            rootname = lkeys(f)[0]
+            ds = f[rootname]['data']
         pk = csd_to_pk(ds)
     return pk
 
@@ -306,6 +310,8 @@ def rmfile(file_path):
 def rglob(dir_path, pattern):
     return list(map(lambda elt: str(elt), pathlib.Path(dir_path).rglob(pattern)))
 
+mv = shutil.move
+
 def move_matching_files(dir_path, pattern, new_dir, overwrite):
     rm_mkdirp(new_dir, True, overwrite)
     for elt in rglob(dir_path, pattern):
@@ -385,6 +391,7 @@ def sh_to_launch(a, launch_path='/work/awilf/MTAG/.vscode/launch.json'):
                 "type": "python",
                 "request": "launch",
                 # "env": { "CUDA_LAUNCH_BLOCKING": "1" },
+                # "program": "${file}",
                 "program": f"{prog}",
                 "console": "integratedTerminal",
                 "justMyCode": False,

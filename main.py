@@ -28,11 +28,8 @@ from models.common import *
 from models.graph_builder import construct_time_aware_dynamic_graph, build_time_aware_dynamic_graph_uni_modal, build_time_aware_dynamic_graph_cross_modal
 from models.global_const import gc
 from models.mosi import*
+import sys; sys.path.append('/work/awilf/Standard-Grid'); import standard_grid
 
-SG_PATH = '/work/awilf/Standard-Grid'
-import sys
-sys.path.append(SG_PATH)
-import standard_grid
 
 import gc as g
 from sklearn.metrics import accuracy_score
@@ -93,9 +90,8 @@ def train_model_social():
         replace_inf(preloaded_dev[3])
 
         # TODO: clean up global variables here
-        intervals_subpath = 'vad_intervals_squashed.pk' if gc['gran'] == 'chunk' else 'bert_features.pk'
-        intervals_path = join(gc['data_path'], intervals_subpath)
-        intervals = load_pk(intervals_path)
+        # intervals_subpath = 'vad_intervals_squashed.pk' if gc['gran'] == 'chunk' else 'bert_features.pk'
+        intervals = load_pk(join(gc['raw_data'], 'text', 'vad', 'full_bert_feats.pk'))
         if gc['net'] == 'graphqa':
             train_loader = get_loader_solograph(preloaded_train, 'social_train')
             dev_loader = get_loader_solograph(preloaded_dev, 'social_dev')
@@ -247,7 +243,7 @@ def train_social_baseline():
                     pass
         
         if gc['factorized_key_subset']:
-            factorized_keys = load_pk(join(gc['data_path'], 'social_train_keys_word.pk')) + load_pk(join(gc['data_path'], 'social_dev_keys_word.pk'))
+            factorized_keys = load_pk(join(gc['proc_data'], 'social_train_keys_word.pk')) + load_pk(join(gc['proc_data'], 'social_dev_keys_word.pk'))
             trk = lfilter(lambda elt: elt in factorized_keys, trk)
             dek = lfilter(lambda elt: elt in factorized_keys, dek)
 
@@ -358,10 +354,11 @@ def get_arguments():
 if __name__ == "__main__":
     get_arguments() # updates gc
 
-    assert gc['dataroot'] is not None, "You havn't provided the dataset path! Use the default one."
-    # assert gc['task'] in ['mosi', 'mosei', 'mosi_unaligned', 'mosei_unaligned', 'iemocap', 'iemocap_unaligned', 'social_unaligned'], "Unsupported task. Should be either mosi or mosei"
-    # gc['dataset'] = gc['task']
-    gc['data_path'] = gc['dataroot']
+    assert gc['data_path'] is not None, "You havn't provided the dataset path! Use the default one."
+    gc['data_path'] = join(gc['data_path'], gc['dataset'])
+    gc['proc_data'] = join(gc['data_path'], 'processed')
+    gc['csd_data'] = join(gc['data_path'], 'csd')
+    gc['raw_data'] = join(gc['data_path'], 'raw')
 
     start_time = time.time()
     
