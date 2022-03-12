@@ -71,7 +71,6 @@ def raw_to_csd():
     #     video_save_path = join(gc["csd_data"], f'{gc["video_feat"]}.pk')
     #     all_videos = join(gc['raw_data'], 'video')
     #     get_densenet_features(all_videos, desired_fps=1, temp_save_path=video_save_path)
-
     
     wav_dir = join(gc['raw_data'], 'audio')
     text_path = join(gc['raw_data'], 'text')
@@ -139,20 +138,23 @@ def csd_to_processed():
     del dataset.computational_sequences['dummy']
 
     if gc['gran'] == 'chunk':
-        assert False, 'granularity must be word level for now'
-        add_seq(dataset, join(gc["csd_data"], 'SOCIAL_IQ_TRANSCRIPT_RAW_CHUNKS_BERT.csd'), 'Transcript_Raw_Chunks_BERT')
+        # assert False, 'granularity must be word level for now'
+        add_seq(dataset, join(gc["csd_data"], 'SOCIAL_IQ_TRANSCRIPT_RAW_CHUNKS_BERT.csd'), 'text')
     else:
         add_seq(dataset, join(gc["csd_data"], 'transcript.pk'), 'text')
     
     add_seq(dataset, join(gc["csd_data"], 'SOCIAL_IQ_COVAREP.csd'), 'audio')
-    add_seq(dataset, join(gc["csd_data"], 'SOCIAL_IQ_DENSENET161_1FPS.csd'), 'video')
+    # add_seq(dataset, join(gc["csd_data"], 'SOCIAL_IQ_DENSENET161_1FPS.csd'), 'video')
+    add_seq(dataset, join(gc["csd_data"], 'beit.pk'), 'video')
 
     dataset.align("text",collapse_functions=[myavg])
     dataset.impute("text")
     dataset.revert()
     dataset.unify()
 
-    add_seq(dataset, join(gc['csd_data'], "SOCIAL-IQ_QA_BERT_LASTLAYER_BINARY_CHOICE.csd"), 'QA_BERT_lastlayer_binarychoice')
+    # add_seq(dataset, join(gc['csd_data'], "SOCIAL-IQ_QA_BERT_LASTLAYER_BINARY_CHOICE.csd"), 'QA_BERT_lastlayer_binarychoice')
+    add_seq(dataset, join(gc['csd_data'], "new_qa.pk"), 'QA_BERT_lastlayer_binarychoice')
+    # add_seq(dataset, join(gc['csd_data'], "dummy.csd"), 'QA_BERT_lastlayer_binarychoice')
     
     return dataset
 
@@ -189,7 +191,7 @@ def build_visual(visual,keys):
     vis_features=[]
     for i in range (len(keys)):
         this_vis=numpy.array(visual[keys[i]]["features"])
-        this_vis=numpy.concatenate([this_vis,numpy.zeros([gc['seq_len'],2208])],axis=0)[:gc['seq_len'],:]
+        this_vis=numpy.concatenate([this_vis,numpy.zeros([gc['seq_len'],768])],axis=0)[:gc['seq_len'],:]
         vis_features.append(this_vis)
     return numpy.array(vis_features,dtype="float32").transpose(1,0,2)
 
@@ -220,11 +222,13 @@ def process_data(keys, name, _gc):
 
     save_path = join(gc['proc_data'], f'{name}_social_{gc["gran"]}_{gc["seq_len"]}.pk')
     res = load_pk(save_path)
-    if res is None:
-    # if True:
+    # if res is None:
+    if True:
         if social_iq is None:
             raw_to_csd()
             social_iq = csd_to_processed()
+        label_keys = social_iq['QA_BERT_lastlayer_binarychoice'].keys()
+        keys = [elt for elt in keys if elt in label_keys] # trim to label keys
         print(f'Building and writing processed data for {save_path}')
         qa_glove=social_iq["QA_BERT_lastlayer_binarychoice"]
         visual=social_iq["video"]
@@ -295,7 +299,7 @@ def init_tensor_mfn_modules():
     q_lstm=MyLSTM(768,50).cuda()
     a_lstm=MyLSTM(768,50).cuda()
     t_lstm=MyLSTM(768,50).cuda()
-    v_lstm=MyLSTM(2208,20).cuda()
+    v_lstm=MyLSTM(768,20).cuda()
     ac_lstm=MyLSTM(74,20).cuda()
 
     mfn_mem=MyLSTM(100,100).cuda()

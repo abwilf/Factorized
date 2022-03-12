@@ -10,7 +10,7 @@ class MultimodalSubdata():
         self.name = name
         self.text = np.empty(0)
         self.audio = np.empty(0)
-        self.vision = np.empty(0)
+        self.video = np.empty(0)
         self.y = np.empty(0)
 
 class MosiDataset(Data.Dataset):
@@ -35,18 +35,19 @@ class MosiDataset(Data.Dataset):
 
         self.text = self.dataset.text
         self.audio = self.dataset.audio
-        self.vision = self.dataset.vision
+        self.video = self.dataset.video
         self.y = self.dataset.y
 
 
     def load_data(self,gc):
-        if gc['data_path'][-1] != '/':
-            gc['data_path'] = gc['data_path'] + '/'
-        dataset = pickle.load(open(gc['data_path'] + 'mosi_data.pkl', 'rb'))
+        if gc['proc_data'][-1] != '/':
+            gc['proc_data'] = gc['proc_data'] + '/'
+        dataset = pickle.load(open(gc['proc_data'] + 'mosi_data.pkl', 'rb'))
+        video = 'video' if 'video' in dataset['test'] else 'vision'
         gc['padding_len'] = dataset['test']['text'].shape[1]
         gc['text_dim'] = dataset['test']['text'].shape[2]
         gc['audio_dim'] = dataset['test']['audio'].shape[2]
-        gc['vision_dim'] = dataset['test']['vision'].shape[2]
+        gc['video_dim'] = dataset['test']['video'].shape[2]
 
         for ds, split_type in [(MosiDataset.trainset, 'train'), (MosiDataset.validset, 'valid'),
                                (MosiDataset.testset, 'test')]:
@@ -54,13 +55,13 @@ class MosiDataset(Data.Dataset):
             ds.audio = torch.tensor(dataset[split_type]['audio'].astype(np.float32))
             ds.audio[ds.audio == -np.inf] = 0
             ds.audio = ds.audio.clone().cpu().detach()
-            ds.vision = torch.tensor(dataset[split_type]['vision'].astype(np.float32)).cpu().detach()
+            ds.video = torch.tensor(dataset[split_type]['video'].astype(np.float32)).cpu().detach()
             ds.y = torch.tensor(dataset[split_type]['labels'].astype(np.float32)).cpu().detach()
             ds.ids = dataset[split_type]['id'][:,0].reshape(-1)
 
     def __getitem__(self, index):
         inputLen = len(self.text[index])
-        return self.text[index], self.audio[index], self.vision[index], \
+        return self.text[index], self.audio[index], self.video[index], \
                inputLen, self.y[index].squeeze()
 
     def __len__(self):
@@ -68,4 +69,4 @@ class MosiDataset(Data.Dataset):
 
 
 if __name__ == "__main__":
-    dataset = MosiDataset(gc['data_path'])
+    dataset = MosiDataset(gc['proc_data'])

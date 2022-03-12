@@ -1,121 +1,63 @@
 # Don't bother reading this!  Just utility functions.
-import shutil, os, pathlib, pickle, sys, math, importlib, json.tool, argparse, requests, atexit, builtins
+# pip install pandas numpy requests tqdm h5py
+import shutil, os, pathlib, pickle, sys, math, importlib, json.tool, argparse, requests, atexit, builtins, itertools
 import pandas as pd
 import numpy as np
 from glob import glob
-from os.path import join, exists, isdir
+from os.path import exists, isdir
 from tqdm import tqdm
 from itertools import product
 from datetime import datetime
-from sklearn.utils import class_weight
-from os.path import join
-
-from itertools import product
-import collections
-import functools
-# import matplotlib.pyplot as plt
-
-# saving and plotting results
-def get_cloud(arr):
-    '''get tops, bots, means of 2d arr'''
-    arr = np.array(arr)
-    epochs = range(arr.shape[1])
-    stds = [np.std(arr[:, i]) for i in epochs]
-    means = [np.mean(arr[:, i]) for i in epochs]
-    return [means[i] + stds[i] for i in epochs], [means[i] - stds[i] for i in epochs], means
-
-def plot_mtb(result, ax, color, second_color, x_axis=None):
-    '''plot means, upper, lower bounds - x_axis (if specified) is (name, arr) tuple'''
-    linewidth=.6
-    alpha = .6
-    alpha_second = .2
-    x_axis = np.arange(len(result['mean'])) if x_axis is None else x_axis[1]
-    ax.plot(x_axis, result['upper'], color=color, alpha=alpha_second, linewidth=linewidth)
-    ax.plot(x_axis, result['lower'], color=color, alpha=alpha_second, linewidth=linewidth)
-    ax.plot(x_axis, result['mean'], color=color, linewidth=linewidth, label=result['model_name'], alpha=alpha)
-    ax.fill_between(x_axis, result['mean'], result['upper'], linewidth=linewidth, color=second_color, alpha=alpha)
-    ax.fill_between(x_axis, result['mean'], result['lower'], linewidth=linewidth, color=second_color, alpha=alpha)
-
-def plot_results(results, problem, fig_path, x_axis=None):
-    colors = {
-        # 0: ('#00a288', '#00a288'),
-        # 1: ('#bdbe34', '#bdbe34'),
-        # 2: ('#1a515e', '#1a515e'),
-        # 3: ('#52a8b6', '#52a8b6'),
-        # 4: ('#bd3246', '#bd3246'),
-        # 5: ('#36c185', '#36c185'),
-        # 2: ('blue', '#6bb5e3'),
-        0: ('#5c4c9c', '#7384b1'),
-        1: ('red', 'pink'),
-        2: ('black', 'gray'),
-        3: ('#1ea1a1', '#88cacb'),
-        4: ('#ffff21', '#ffffa3')
-
-        # 0:
-    }
-
-    plt.figure(figsize=(12, 9))
-    fig, ax = plt.subplots()
-    ax.spines['top'].set_visible(False)
-    ax.spines['right'].set_visible(False)
-    ax.yaxis.set_major_formatter(FormatStrFormatter('%.2f'))
-
-    if type(PROBLEM_MAP[problem] == tuple):
-        train_ds = ','.join(PROBLEM_MAP[problem][0])
-        test_ds = PROBLEM_MAP[problem][1]
-        plt.title(f'{train_ds} to {test_ds}', fontsize=14, pad=0)
-    else:
-        ds = PROBLEM_MAP[problem]
-        plt.title(f'{ds}', fontsize=14, pad=0)
-
-    plt.xlabel('Epoch' if x_axis is None else x_axis[0], fontsize=12)
-    plt.ylabel('UAR', fontsize=12)
-    for i, result in enumerate(results):
-        if i not in colors:
-            i = 0
-        color, second_color = colors[i]
-        plot_mtb(result, ax, color, second_color, x_axis=x_axis)
-
-    handles, labels = ax.get_legend_handles_labels()
-    labels, handles = zip(*sorted(zip(labels, handles), reverse=True, key=lambda t: np.mean(t[1]._yorig)))
-    labels = lmap(modify_plot_name, labels)
-    leg = ax.legend(handles, labels)
-
-    # leg = ax.legend()
-    for legobj in leg.legendHandles:
-        legobj.set_linewidth(1.3)
-
-    fig.savefig(fig_path, bbox_inches='tight', dpi=300)
-    print(f'Results plotted to {fig_path}')
+from collections import defaultdict
+# from sklearn.utils import class_weight
+import pprint
+import re
 
 
-class memoized(object):
-   '''Decorator. Caches a function's return value each time it is called.
-   If called later with the same arguments, the cached value is returned
-   (not reevaluated).
-   src: https://wiki.python.org/moin/PythonDecoratorLibrary#Memoize
-   '''
-   def __init__(self, func):
-      self.func = func
-      self.cache = {}
-   def __call__(self, *args):
-      if not isinstance(args, collections.Hashable):
-         # uncacheable. a list, for instance.
-         # better to not cache than blow up.
-         return self.func(*args)
-      if args in self.cache:
-         return self.cache[args]
-      else:
-         value = self.func(*args)
-         self.cache[args] = value
-         return value
-   def __repr__(self):
-      '''Return the function's docstring.'''
-      return self.func.__doc__
-   def __get__(self, obj, objtype):
-      '''Support instance methods.'''
-      return functools.partial(self.__call__, obj)
+np.cat = np.concatenate
 
+def get_args(defaults,gc,sg_path='/work/awilf/Standard-Grid'):
+    import sys; sys.path.append(sg_path); import standard_grid
+    # takes defaults, initializes argparse, modifies gc to contain all args
+    # e.g. defaults = [
+    #     ('--out_dir', str, 'fakeresults/hi1'),
+    #     ('--hp1', int, 0)
+    # ]
+
+    parser = standard_grid.ArgParser()
+    for arg in defaults:
+        parser.register_parameter(*arg)
+    args = parser.compile_argparse()
+
+    for arg, val in args.__dict__.items():
+        gc[arg] = val
+
+    return gc
+
+def load_pknone(path, func, args):
+    # load pk from path, if none execute func with args, save result in path and return
+    pk = load_pk(path)
+    if pk is None:
+        pk = func(*args)
+        save_pk(path, pk)
+    return pk
+    
+
+def flatten(x):
+    '''x is list of lists'''
+    merged = list(itertools.chain.from_iterable(x))
+    return merged
+
+def pstring(elt):
+    import pprint
+    return pprint.pformat(elt,indent=4)
+
+pp = pprint.PrettyPrinter(indent=4).pprint
+
+def join(*args):
+    '''os.path.join but turns all args into strings'''
+    new_args = [str(elt) for elt in args]
+    return os.path.join(*new_args)
 
 def get_sample_weight(labels,class_weights=None):
     labels = labels.astype('int32')
@@ -128,18 +70,57 @@ def avg(intervals: np.array, features: np.array) -> np.array:
     try:
         return np.average(features, axis=0)
     except:
-        return features
+        return features 
 
-def csd_to_pk(ds, key, path=None):
+def pk_to_amir_csd(pk, path,metadata=None):
+    '''
+    pk of form {
+        'k1': {
+            'features': np array
+            'intervals': np array
+        }
+    }
+
+    writes this pk to path, which should be of form /a/b/hi.csd, where hi will be the rootname
+    '''
+    import h5py
+    rm(path)
+    with h5py.File(path, 'w') as file_handle:
+        rootname = path.split('/')[-1].replace('.csd', '')
+        root_handle = file_handle.create_group(rootname)
+        data_handle = root_handle.create_group('data')
+        metadata_handle = root_handle.create_group('metadata')
+        # metadata_handle['root name'] = rootname
+
+        for vid in pk:
+            vid_handle = data_handle.create_group(vid)
+
+            vid_handle.create_dataset('features',data=pk[vid]['features'])
+            vid_handle.create_dataset('intervals',data=pk[vid]['intervals'])
+
+        metadata_handle.create_dataset('root name', data=np.arange(2))
+        file_handle.close()
+
+def csd_to_pk(ds, path=None):
+    '''ds is in h5py format, but just looking at the different keys in this group, each of which has features and intervals datasets'''
     new_text = {}
-    for k in ds[key].keys():
+    for k in ds.keys():
         new_text[k] = {
-            'features': ar(ds[key][k]['features']),
-            'intervals': ar(ds[key][k]['intervals']),
+            'features': ar(ds[k]['features']),
+            'intervals': ar(ds[k]['intervals']),
         }
     if path is not None:
         save_pk(path, new_text)
     return new_text
+    
+def amir_csd_to_pk(path):
+    import h5py
+    with h5py.File(path, 'r') as f:
+        rootname = path.split('/')[-1].replace('.csd', '')
+        ds = f[rootname]['data']
+        pk = csd_to_pk(ds)
+    return pk
+
 
 def lvmap(f, arr, axis=None):
     if axis is None:
@@ -166,15 +147,16 @@ def init_exit_hook(gpu_id=None, test=False):
             # t.send('Finished!')
     atexit.register(my_exit_hook)
 
-def send_email(subject='Hi there', text='Hello!', secrets_path='/z/abwilf/dw/mailgun_secrets.json'):
+def send_email(subject='Mailgun', text='Hello', to_addr=None, secrets_path='/work/awilf/utils/mailgun_secrets.json'):
     secrets = load_json(secrets_path)
     return requests.post(
-        secrets['url'],
-        auth=("api", secrets['api_key']),
-        data={"from": secrets['from_addr'],
-            "to": secrets['to_addr'],
-            "subject": subject,
-            "text": text})
+		secrets['url'],
+		auth=("api", secrets['api_key']),
+		data={"from": secrets['from_addr'],
+			"to": [secrets['to_addr'] if to_addr is None else to_addr],
+			"subject": subject,
+			"text": text}
+    )
 
 class Runtime():
     def __init__(self):
@@ -217,16 +199,6 @@ def init_exit_hook(gpu_id=None, test=False):
             # t.send('Finished!')
     atexit.register(my_exit_hook)
 
-def send_email(subject='Hi there', text='Hello!', secrets_path='./mailgun_secrets.json'):
-    secrets = load_json(secrets_path)
-    return requests.post(
-        secrets['url'],
-        auth=("api", secrets['api_key']),
-        data={"from": secrets['from_addr'],
-            "to": secrets['to_addr'],
-            "subject": subject,
-            "text": text})
-
 def obj_to_grid(a):
     '''get all objects corresponding to hyperparamter grid search
     a = {'b': [1,2], 'c': [3,4], 'd': 5}
@@ -246,13 +218,34 @@ def obj_to_grid(a):
 def ar(a):
     return np.array(a)
 
-def rmtree(dir_path):
-    print(f'Removing {dir_path}')
-    if os.path.isdir(dir_path):
-        shutil.rmtree(dir_path)
-    # else:
-        # print(f'{dir_path} is not a directory, so cannot remove')
+def cp(src, dst):
+    shutil.copy(src, dst)
 
+def cpr(src,dst): 
+    shutil.copytree(src,dst)
+
+def rm(filepath):
+    if exists(filepath):
+        os.remove(filepath)
+
+def rmrf(dir_path):
+    if exists(dir_path):
+        print(f'Removing {dir_path}')
+        if os.path.isdir(dir_path):
+            shutil.rmtree(dir_path)
+        else:
+            os.remove(dir_path)
+rmtree = rmrf
+
+def read_txt(filename):
+    with open(filename, 'r') as f:
+        s = f.read()
+    return s
+
+def write_txt(filename, s):
+    with open(filename, 'w') as f:
+        f.write(s)
+        
 def remove_inf(x):
     x[x==-np.inf] = 0
     x[x==np.inf] = 0
@@ -317,15 +310,93 @@ def df_sample():
 def subset(a, b):
     return np.min([elt in b for elt in a]) > 0
 
-def subsets_eq(a,b):
+def subsets_equal(a,b):
     return subset(a,b) and subset(b,a)
+
+subsets_eq = subsets_equal
+
+def pairs_to_arr(pairs):
+    # pairs of idxs to an array in graph nn form: e.g. pairs = [(0,0), (0,1)] -> [[0,0], [0,1]]
+    return ar(lzip(*pairs)).reshape(2,-1)
+
+def arr_to_pairs(arr):
+    return lzip(ar(arr)[0,:], ar(arr)[1,:])
+
+def pointers_eq(conn1, conn2):
+    # conn1 and conn2 are of shape (2,x), where each pair is a start, end coord: for graph NN testing
+    # conn1 = ar([[0, 1, 2, 3, 4, 5], [0, 1, 2, 3, 4, 5]])
+    # conn2 = ar([[0, 1, 2, 3, 4, 5], [0, 1, 2, 3, 4, 5]])
+
+    conn1 = ar(conn1)
+    conn2 = ar(conn2)
+    conn1set = arr_to_pairs(conn1)
+    conn2set = arr_to_pairs(conn2)
+    return subsets_equal(conn1set, conn2set)
+
+def pointers_diff(conn1, conn2):
+    conn1 = ar(conn1)
+    conn2 = ar(conn2)
+    conn1set = arr_to_pairs(conn1)
+    conn2set = arr_to_pairs(conn2)
+
+    return [elt for elt in conn1set if elt not in conn2set], [elt for elt in conn2set if elt not in conn1set]
 
 def dict_at(d):
     k = lkeys(d)[0]
     return k, d[k]
 
+def dict_val(d):
+    return dict_at(d)[1]
+
 def list_gpus():
     return tf.config.experimental.list_physical_devices('GPU')
+
+def sh_to_launch(a, launch_path='/work/awilf/MTAG/.vscode/launch.json'):
+    '''
+    e.g. 
+    a =
+    # BEST FACTORIZED
+    python main.py \
+    --bs 10 \
+    --drop_het 0 \
+    ...
+
+    or a = 'run_factorized.sh'
+    '''
+    if exists(a):
+        a = read_txt(a).replace('\\','').replace('\n','')
+
+    prog, args = a.strip().replace('#','').split('.py')
+    prog = prog.split("python")[1].strip() + '.py'
+    args = [elt for elt in args.split(' ') if elt != '']
+
+    pk = {
+        "version": "0.2.0",
+        "configurations": [
+            {
+                "name": "Python: Current File",
+                "type": "python",
+                "request": "launch",
+                # "env": { "CUDA_LAUNCH_BLOCKING": "1" },
+                "program": f"{prog}",
+                "console": "integratedTerminal",
+                "justMyCode": False,
+                "args": args
+            }
+        ]
+    }
+    save_json(launch_path, pk)
+    return pk
+
+def launch_to_sh(sh_path):
+    a = load_json('.vscode/launch.json')
+    config = a['configurations'][0]
+    program_type = config['type']
+    program_name = config['program']
+    args = config['args']
+    s = f'{program_type} {program_name} \\\n'  + ' \\\n'.join([' '.join(elt) for elt in lzip(args[:-1:2], args[1::2])])
+    write_txt(sh_path, s)
+    return s
 
 def save_pk(file_stub, pk, protocol=4):
     filename = file_stub if '.pk' in file_stub else f'{file_stub}.pk'
@@ -376,11 +447,6 @@ class NumpyEncoder(json.JSONEncoder):
 
 def save_json(file_stub, obj):
     filename = file_stub
-    for k,v in obj.items():
-        if isinstance(v, list):
-            obj[k] = np.array(v)
-            if obj[k].dtype==np.float32:
-                obj[k] = obj[k].astype(np.float64)
     with open(filename, 'w') as f:
         json.dump(obj, f, cls=NumpyEncoder, indent=4)
 

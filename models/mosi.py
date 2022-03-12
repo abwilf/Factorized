@@ -380,10 +380,18 @@ def postprocess_utt_id(utt_id):
 
 def raw_to_csd():
     # video to csd
-    if gc['video_feat'] == 'densenet':
-        video_save_path = join(gc["csd_data"], f'{gc["video_feat"]}.pk')
-        all_videos = join(gc['raw_data'], 'video')
-        get_densenet_features(all_videos, desired_fps=1, temp_save_path=video_save_path)
+    if not exists(join(gc['csd_data'], f'{gc["video_feat"]}.pk')):
+        if gc['video_feat'] == 'densenet':
+            video_save_path = join(gc["csd_data"], f'{gc["video_feat"]}.pk')
+            all_videos = join(gc['raw_data'], 'video')
+            get_densenet_features(all_videos, desired_fps=1, temp_save_path=video_save_path)
+    
+    # if not exists(join(gc['csd_data'], f'{gc["audio_feat"]}.pk')):
+    #     if gc['audio_feat'] == 'hubert':
+    #         hubert_save_path = join(gc['csd_data'], f'{gc["audio_feat"]}.pk')
+    #         from process_audio import get_features_dir
+    #         get_features_dir(join(gc['raw_data'], 'audio'), save_path=hubert_save_path)
+
     
 def csd_to_processed():
     orig = pickle.load(open(join(gc['proc_data'],'mosi_data.pkl.bak'), 'rb'))
@@ -446,12 +454,6 @@ def csd_to_processed():
         save_pk(ds_save_path, new_dataset)
 
     return new_dataset
-
-# def raw_to_csd():
-#     def get_densenet_features(video_dir, desired_fps=1):
-#     get_densenet_features(gc['raw_data'])
-    
-#     # get densenet features into csd
 
 
 def train_model_mosi():

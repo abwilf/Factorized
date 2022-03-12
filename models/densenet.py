@@ -1,4 +1,14 @@
 import sys; sys.path.append('/work/awilf/utils/'); from alex_utils import *
+import torch.nn as nn
+import torchvision.transforms as transforms
+from PIL import Image 
+
+from transformers import BeitFeatureExtractor, BeitModel
+import transformers
+
+import torch
+import torchvision
+import cv2
 
 np.cat = np.concatenate
 
@@ -11,8 +21,6 @@ def video_to_frames(path,desired_fps=1):
             frames_per_sec
             duration
     '''
-
-    import cv2
     vidcap = cv2.VideoCapture(path)
     
     images = []
@@ -47,60 +55,29 @@ def video_to_frames(path,desired_fps=1):
 
     return new_images, new_intervals
 
-def get_densenet_image(img, model, transforms, Image, torch):
-    '''
-    img is vector of shape [height_pixels, width_pixels, 3]
-    model is pretrained densenet161 model
-    transforms, Image are passed in libraries so I can include this in general alex_utils
+# def get_image_batch(img, model):
+#     '''
+#     img is vector of shape [height_pixels, width_pixels, 3]
+#     model is pretrained densenet161 model
+#     transforms, Image are passed in libraries so I can include this in general alex_utils
     
-    '''
-    # Open image
-    input_image = Image.fromarray(img)
+#     '''
+#     # Open image
+#     input_image = Image.fromarray(img)
 
-    # Preprocess image
-    preprocess = transforms.Compose([
-        transforms.Resize(256),
-        transforms.CenterCrop(224),
-        transforms.ToTensor(),
-        transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
-    ])
-    input_tensor = preprocess(input_image)
-    input_batch = input_tensor.unsqueeze(0)  # create a mini-batch as expected by the model
+#     # Preprocess image
+#     preprocess = transforms.Compose([
+#         transforms.Resize(256),
+#         transforms.CenterCrop(224),
+#         transforms.ToTensor(),
+#         transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
+#     ])
+#     input_tensor = preprocess(input_image)
+#     input_batch = input_tensor.unsqueeze(0)  # create a mini-batch as expected by the model
+#     return input_batch
 
-    # move the input and model to GPU for speed if available
-    if torch.cuda.is_available():
-        input_batch = input_batch.to("cuda")
-
-    features = model.extract_features(input_batch)
-    features = features.mean(-1).mean(-1).squeeze().detach().cpu()
-    del input_batch
-
-    torch.cuda.empty_cache()
-
-    return features
-
-def get_densenet_video(vid):
-    global model
-    import torch
-    import torchvision.transforms as transforms
-    from PIL import Image
-    from densenet_pytorch import DenseNet 
-    if model is None:
-        model = DenseNet.from_pretrained("densenet161")
-        if torch.cuda.is_available():
-            model.to("cuda")
-        model.eval()
-
-    all_feats = []
-    for img in vid:
-        features = get_densenet_image(img, model, transforms, Image, torch)
-        all_feats.append(features)
-
-    all_feats = torch.vstack(all_feats)
-    
-    return all_feats
-
-def get_densenet_videopath(vidpath, desired_fps=1):
+bs = None
+def get_densenet_videopath(vidpath, model, feature_extractor, desired_fps=1):
     # in: path to video mp4 file, fps you want
     # out: 
     #   densenet features extracted over those frames: [num_frames=fps*num_secs, 2208]
@@ -109,41 +86,88 @@ def get_densenet_videopath(vidpath, desired_fps=1):
     vid, intervals = video_to_frames(vidpath,desired_fps)
     if vid is None: # video was not able to be processed
         return None,None
-    features = get_densenet_video(vid)
+
+    # orig_batch = torch.vstack([get_image_batch(img, model) for img in vid])
+    orig_batch = torch.Tensor(vid)
+
+    global bs
+    bs = 1
+    if bs is None: # initially, determine what batch size (number of frames) will be acceptable to GPU memory
+        bs = 1
+        batch = [orig_batch]
+    
+        while True:
+            try:
+                all_feats = []
+                for sb in batch:
+                    with torch.no_grad():
+                        inputs = feature_extractor(images=list(sb), return_tensors="pt")
+                        # inputs = {k: v.to('cuda') for k,v in inputs.items()}
+                        features = model(**inputs).pooler_output
+
+                    all_feats.append(features)
+                    del sb
+                    del inputs
+                    # torch.cuda.empty_cache()
+                break
+            except:
+                del batch
+                batch = torch.split(orig_batch, int(np.ceil(orig_batch.shape[0]/bs)))
+                # torch.cuda.empty_cache()
+
+            bs += 1
+        
+        bs += 3 # to be safe for some batches containing more info than others
+    
+    batch = torch.split(orig_batch, int(np.ceil(orig_batch.shape[0]/bs)))
+    batch = [orig_batch]
+    all_feats = []
+    for sb in batch:
+        with torch.no_grad():
+            inputs = feature_extractor(images=list(sb), return_tensors="pt")
+            # inputs = {k: v.to('cuda') for k,v in inputs.items()}
+            features = model(**inputs).pooler_output
+
+        all_feats.append(features)
+        del sb
+        del inputs
+        # torch.cuda.empty_cache()
+    
+    features = torch.vstack(all_feats).detach().cpu().numpy()
     return features, intervals
 
+
 def get_densenet_features(video_dir, desired_fps=1, temp_save_path='temp.pk'):
-    pk = load_pk(temp_save_path)
+    # pk = load_pk(temp_save_path)
+    pk = None
     if pk is None:
         pk = {}
     
     paths = glob(join(video_dir, '*.mp4'))
     keys = [elt.split('/')[-1].split('.mp4')[0] for elt in paths]
 
-    global model, DenseNet, torch
-    from densenet_pytorch import DenseNet 
-    import torch
-    model = DenseNet.from_pretrained("densenet161")
-    if torch.cuda.is_available():
-        model.to("cuda")
+    feature_extractor = BeitFeatureExtractor.from_pretrained("microsoft/beit-base-patch16-224-pt22k-ft22k")
+    model = BeitModel.from_pretrained("microsoft/beit-base-patch16-224-pt22k-ft22k")
+    # model = model.to('cuda')
     model.eval()
 
     count = 0
-    for path,key in tqdm(lzip(paths,keys)):
+    for path,key in tqdm(lzip(paths,keys)):        
+        count += 1
         if key in pk:
             continue
-        
-        features, intervals = get_densenet_videopath(path, desired_fps)
+
+        features, intervals = get_densenet_videopath(path, model, feature_extractor, desired_fps)
+
         if features is not None:
             pk[key] = {
                 'features': features,
                 'intervals': intervals
             }
-        count += 1
-        # if count > 2:
-        #     break
-        if count % 15 == 0: # save every so often
-            save_pk(temp_save_path, pk)
+        
+        # if count % 50 == 0: # save every so often
+        #     save_pk(temp_save_path, pk) # sometimes this line fails and corrupts memory and shuts down my computer
+        #     save_pk('temp.pk', pk)
     
     save_pk(temp_save_path, pk)
     return pk
@@ -152,8 +176,10 @@ def get_densenet_features(video_dir, desired_fps=1, temp_save_path='temp.pk'):
 if __name__ == '__main__':
     desired_fps = 1
     # path = '/work/awilf/covarep/mp4s/00m9ssEAnU4.mp4'
-    video_dir = '/work/awilf/social_iq_raw/vision/raw/'
-    video_dir = 'data/mosi/raw/Raw/Video/Full/'
-    pk = get_densenet_features(video_dir)
+    # video_dir = '/work/awilf/social_iq_raw/vision/raw/'
+    # video_dir = 'data/mosi/raw/Raw/Video/Full/'
+    # video_dir = '/work/awilf/MTAG/data/social/raw/video'
+    video_dir = '/work/awilf/MTAG/data/bmw/mp4s/'
+    pk = get_densenet_features(video_dir, 1, '/work/awilf/MTAG/beit_bmw.pk')
     a = 2
 

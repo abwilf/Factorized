@@ -1,6 +1,6 @@
 # Don't bother reading this!  Just utility functions.
 # pip install pandas numpy requests tqdm h5py
-import shutil, os, pathlib, pickle, sys, math, importlib, json.tool, argparse, requests, atexit, builtins, itertools,h5py
+import shutil, os, pathlib, pickle, sys, math, importlib, json.tool, argparse, requests, atexit, builtins, itertools
 import pandas as pd
 import numpy as np
 from glob import glob
@@ -83,6 +83,7 @@ def pk_to_amir_csd(pk, path,metadata=None):
 
     writes this pk to path, which should be of form /a/b/hi.csd, where hi will be the rootname
     '''
+    import h5py
     rm(path)
     with h5py.File(path, 'w') as file_handle:
         rootname = path.split('/')[-1].replace('.csd', '')
@@ -113,13 +114,10 @@ def csd_to_pk(ds, path=None):
     return new_text
     
 def amir_csd_to_pk(path):
+    import h5py
     with h5py.File(path, 'r') as f:
         rootname = path.split('/')[-1].replace('.csd', '')
-        try:
-            ds = f[rootname]['data']
-        except:
-            rootname = lkeys(f)[0]
-            ds = f[rootname]['data']
+        ds = f[rootname]['data']
         pk = csd_to_pk(ds)
     return pk
 
@@ -149,15 +147,16 @@ def init_exit_hook(gpu_id=None, test=False):
             # t.send('Finished!')
     atexit.register(my_exit_hook)
 
-def send_email(subject='Hi there', text='Hello!', secrets_path='/z/abwilf/dw/mailgun_secrets.json'):
+def send_email(subject='Mailgun', text='Hello', to_addr=None, secrets_path='/work/awilf/utils/mailgun_secrets.json'):
     secrets = load_json(secrets_path)
     return requests.post(
-        secrets['url'],
-        auth=("api", secrets['api_key']),
-        data={"from": secrets['from_addr'],
-            "to": secrets['to_addr'],
-            "subject": subject,
-            "text": text})
+		secrets['url'],
+		auth=("api", secrets['api_key']),
+		data={"from": secrets['from_addr'],
+			"to": [secrets['to_addr'] if to_addr is None else to_addr],
+			"subject": subject,
+			"text": text}
+    )
 
 class Runtime():
     def __init__(self):
@@ -199,16 +198,6 @@ def init_exit_hook(gpu_id=None, test=False):
             send_email()
             # t.send('Finished!')
     atexit.register(my_exit_hook)
-
-def send_email(subject='Hi there', text='Hello!', secrets_path='./mailgun_secrets.json'):
-    secrets = load_json(secrets_path)
-    return requests.post(
-        secrets['url'],
-        auth=("api", secrets['api_key']),
-        data={"from": secrets['from_addr'],
-            "to": secrets['to_addr'],
-            "subject": subject,
-            "text": text})
 
 def obj_to_grid(a):
     '''get all objects corresponding to hyperparamter grid search
@@ -310,8 +299,6 @@ def rmfile(file_path):
 def rglob(dir_path, pattern):
     return list(map(lambda elt: str(elt), pathlib.Path(dir_path).rglob(pattern)))
 
-mv = shutil.move
-
 def move_matching_files(dir_path, pattern, new_dir, overwrite):
     rm_mkdirp(new_dir, True, overwrite)
     for elt in rglob(dir_path, pattern):
@@ -391,7 +378,6 @@ def sh_to_launch(a, launch_path='/work/awilf/MTAG/.vscode/launch.json'):
                 "type": "python",
                 "request": "launch",
                 # "env": { "CUDA_LAUNCH_BLOCKING": "1" },
-                # "program": "${file}",
                 "program": f"{prog}",
                 "console": "integratedTerminal",
                 "justMyCode": False,
