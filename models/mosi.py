@@ -457,8 +457,7 @@ def csd_to_processed():
 
 
 def train_model_mosi():
-    
-    raw_to_csd()
+    # raw_to_csd()
     dataset = csd_to_processed()
     
     # write this to mosi_data.pkl

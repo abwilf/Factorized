@@ -222,8 +222,8 @@ def process_data(keys, name, _gc):
 
     save_path = join(gc['proc_data'], f'{name}_social_{gc["gran"]}_{gc["seq_len"]}.pk')
     res = load_pk(save_path)
-    # if res is None:
-    if True:
+    if res is None:
+    # if True:
         if social_iq is None:
             raw_to_csd()
             social_iq = csd_to_processed()
