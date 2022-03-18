@@ -24,6 +24,8 @@ pip install scipy PyYAML
 pip install torch==1.8.1+cu102 torchvision==0.9.1+cu102 torchaudio==0.8.1 -f https://download.pytorch.org/whl/torch_stable.html
 conda upgrade -c anaconda pip
 p -c "import torch; print(torch.cuda.is_available())"
+
+pip install -r requirements.txt
 ```
 
 ### On local machine
