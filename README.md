@@ -45,6 +45,7 @@ First, download the data. I've uploaded it on google drive at this link. Extract
 
 ```
 git clone https://github.com/abwilf/Factorized.git && cd Factorized/
+# Skip the following three steps if you are on the lab ATLAS machine
 mkdir -p data/ && cd data/
 pip install gdown
 gdown https://drive.google.com/uc?id=11PNtUAjfgEre8uN83ThMewCm5qGL-qb4
@@ -71,7 +72,8 @@ git clone https://github.com/martinmamql/CMU-MultimodalSDK.git # slightly update
 ```
 
 ## Running the Program
-For social-iq, run `bash run_word.sh`.
+
+For social-iq, run `bash run_word.sh`. # if you are on the lab ATLAS server, use 
 To run on mosi, use `bash run_mosi.py`. 
 
 ## Program Structure
