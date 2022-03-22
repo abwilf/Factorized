@@ -44,16 +44,28 @@ pip install -r requirements.txt
 First, download the data. I've uploaded it on google drive at this link. Extract it to `data/`.
 
 ```
+mkdir -p data/ && cd data/
 pip install gdown
 gdown https://drive.google.com/uc?id=11PNtUAjfgEre8uN83ThMewCm5qGL-qb4
 ```
 
-Replace all instances of `/work/awilf/` in this codebase with your top level directory (the directory just above this one).  I'm sure there's some way to do this via the command line; I use vscode for it. Clone this repository into it and name it `MTAG` (`mv mtag MTAG`), so that you have this repo as `/work/awilf/MTAG` (replace `/work/awilf/` with your top level).
+Replace all instances of `/work/awilf/` in this codebase with your top level directory (the directory just above this one).  
+
+```
+cd ..
+find . -type f -exec sed -i 's/\/work\/awilf/\/work\/ANDREWID\/g' {} +
+```
+Clone this repository into it and name it `MTAG` (`mv Factorized MTAG`), so that you have this repo as `/work/awilf/MTAG` (after replace `/work/awilf/` with your top level).
+
+```
+cd ..
+mv Factorized MTAG
+```
 
 You will also need to clone these two repositories into the same top level directory:
 ```
-https://github.com/abwilf/Standard-Grid
-https://github.com/A2Zadeh/CMU-MultimodalSDK
+git clone https://github.com/abwilf/Standard-Grid
+git clone https://github.com/A2Zadeh/CMU-MultimodalSDK
 ```
 
 ## Running the Program
