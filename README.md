@@ -44,6 +44,7 @@ pip install -r requirements.txt
 First, download the data. I've uploaded it on google drive at this link. Extract it to `data/`.
 
 ```
+git clone https://github.com/abwilf/Factorized.git && cd Factorized/
 mkdir -p data/ && cd data/
 pip install gdown
 gdown https://drive.google.com/uc?id=11PNtUAjfgEre8uN83ThMewCm5qGL-qb4
@@ -53,9 +54,10 @@ Replace all instances of `/work/awilf/` in this codebase with your top level dir
 
 ```
 cd ..
-find . -type f -exec sed -i 's/\/work\/awilf/\/work\/ANDREWID\/g' {} +
+find . -type f -exec sed -i 's/\/work\/awilf/[YOUR DIRECTORY]/g' {} + # remember to use \/ to represent "/" in directories
 ```
-Clone this repository into it and name it `MTAG` (`mv Factorized MTAG`), so that you have this repo as `/work/awilf/MTAG` (after replace `/work/awilf/` with your top level).
+
+Clone this repository into it and name it `MTAG` (`mv Factorized MTAG`), so that you have this repo as `[YOUR DIRECTORY]/MTAG` (after replace `/work/awilf/` with your top level).
 
 ```
 cd ..
