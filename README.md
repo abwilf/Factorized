@@ -67,7 +67,7 @@ mv Factorized MTAG
 You will also need to clone these two repositories into the same top level directory:
 ```
 git clone https://github.com/abwilf/Standard-Grid
-git clone https://github.com/A2Zadeh/CMU-MultimodalSDK
+git clone https://github.com/martinmamql/CMU-MultimodalSDK.git # slightly updated version for this repo
 ```
 
 ## Running the Program
