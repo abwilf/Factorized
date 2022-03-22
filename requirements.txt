@@ -102,4 +102,5 @@ yacs
 zipp
 opencv-python
 wget
-librosa
+Cython
+nemo_toolkit['all']
