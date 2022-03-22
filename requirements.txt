@@ -100,3 +100,6 @@ webencodings
 widgetsnbextension
 yacs
 zipp
+opencv-python
+wget
+librosa
