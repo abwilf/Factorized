@@ -3,7 +3,7 @@ import os
 import wget
 import matplotlib.pyplot as plt
 import numpy as np
-import librosa
+#import librosa
 from nemo.collections.asr.parts.utils.speaker_utils import rttm_to_labels, labels_to_pyannote_object
 from omegaconf import OmegaConf
 from nemo.collections.asr.models import ClusteringDiarizer

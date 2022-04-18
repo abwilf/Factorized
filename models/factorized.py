@@ -751,10 +751,10 @@ class Solograph_HeteroGNN(torch.nn.Module):
     def forward(self, x_dict, edge_index_dict, batch_dict):
         mod_dict = {k: v for k,v in x_dict.items() if k not in ['z', 'q', 'a']}
         qaz_dict = {k: v for k,v in x_dict.items() if k in ['z', 'q', 'a']}
-        mod_dict = {key: self.lin_dict[key](x) for key, x in mod_dict.items()}
-        qaz_dict['z'] = self.lin_dict['text'](qaz_dict['z'])
+        mod_dict = {key: self.lin_dict[key](x) for key, x in mod_dict.items()} # update modality nodes
+        qaz_dict['z'] = self.lin_dict['text'](qaz_dict['z']) # update Z node
 
-        # apply pe
+        # apply positional encoding
         for m, v in mod_dict.items(): # modality, tensor
             idxs = batch_dict[m]
             assert (idxs==(idxs.sort().values)).all()
@@ -766,6 +766,7 @@ class Solograph_HeteroGNN(torch.nn.Module):
             **qaz_dict,
         }
         
+        # Graph convolution 
         for i,conv in enumerate(self.convs):
             x_dict, edge_types = conv(x_dict, edge_index_dict, return_attention_weights_dict={elt: True for elt in all_connections+qa_conns + z_conns})
 
@@ -786,8 +787,10 @@ class Solograph_HeteroGNN(torch.nn.Module):
         if gc['scene_mean']:
             x = torch.cat([v for k,v in x_dict.items() if k not in non_mod_nodes], axis=0)
             batch_dicts = torch.cat([v for k,v in batch_dict.items() if k not in non_mod_nodes], axis=0)
-            x = scatter_mean(x, batch_dicts, dim=0)
-            scene_rep = x
+            # text, audio, video: torch.Size([5419, 80]) torch.Size([5419, 80]) torch.Size([5419, 80])
+            # x_dict['q']: 216, 80; ['a']: 432, 80; ['z']: 336, 80;  
+            x = scatter_mean(x, batch_dicts, dim=0) # 216, 80 
+            scene_rep = x # 216, 80
 
             return x_dict['q'], x_dict['a'], scene_rep
         else:
@@ -824,22 +827,22 @@ class Solograph(torch.nn.Module):
 
         # assert torch.all(torch.cat([a_idx[None,:], i_idxs[None,:]], dim=0).sum(dim=0) == 1).item()
         if gc['scene_mean']:
-            q_out, a_out, scene_rep = self.hetero_gnn(x_dict, batch.edge_index_dict, batch.batch_dict)
+            q_out, a_out, scene_rep = self.hetero_gnn(x_dict, batch.edge_index_dict, batch.batch_dict) # 216, 80; 432, 80; 216, 80
 
-            a = a_out[torch.where(a_idx)[0]]
-            inc = a_out[torch.where(i_idx)[0]]
+            a = a_out[torch.where(a_idx)[0]]# 216, 80
+            inc = a_out[torch.where(i_idx)[0]]# 216, 80
 
-            correct = self.judge(torch.cat((q_out, a, inc, scene_rep), 1))
-            incorrect = self.judge(torch.cat((q_out, inc, a, scene_rep), 1))
+            correct = self.judge(torch.cat((q_out, a, inc, scene_rep), 1))# 216, 1
+            incorrect = self.judge(torch.cat((q_out, inc, a, scene_rep), 1))# 216, 1
         
         else:
-            q_out, a_out = self.hetero_gnn(x_dict, batch.edge_index_dict, batch.batch_dict)
+            q_out, a_out = self.hetero_gnn(x_dict, batch.edge_index_dict, batch.batch_dict) # 216, 80; 432, 80
 
-            a = a_out[torch.where(a_idx)[0]]
-            inc = a_out[torch.where(i_idx)[0]]
+            a = a_out[torch.where(a_idx)[0]] # 216, 80
+            inc = a_out[torch.where(i_idx)[0]] # 216, 80
 
-            correct = self.judge(torch.cat((q_out, a, inc), 1))
-            incorrect = self.judge(torch.cat((q_out, inc, a), 1))
+            correct = self.judge(torch.cat((q_out, a, inc), 1)) # 216, 1
+            incorrect = self.judge(torch.cat((q_out, inc, a), 1)) # 216, 1
 
         return correct, incorrect
 
