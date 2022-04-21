@@ -48,7 +48,7 @@ pip install gdown
 gdown https://drive.google.com/uc?id=11PNtUAjfgEre8uN83ThMewCm5qGL-qb4
 ```
 
-Replace all instances of `/work/awilf/` in this codebase with your top level directory (the directory just above this one).  I'm sure there's some way to do this via the command line; I use vscode for it. Clone this repository into it and name it `MTAG` (`mv mtag MTAG`), so that you have this repo as `/work/awilf/MTAG` (replace `/work/awilf/` with your top level).
+Replace all instances of `/work/qianlim/mtag/` in this codebase with your top level directory (the directory just above this one).  I'm sure there's some way to do this via the command line; I use vscode for it. Clone this repository into it and name it `MTAG` (`mv mtag MTAG`), so that you have this repo as `/work/qianlim/mtag/MTAG` (replace `/work/qianlim/mtag/` with your top level).
 
 You will also need to clone these two repositories into the same top level directory:
 ```
