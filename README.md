@@ -94,4 +94,5 @@ To run on mosi, use `bash run_mosi.py`.
 `models/mosi.py`: contains data processing in model creation for mosi
 
 ## Self-supervised
-`run_ssl.sh`: first run `main_ssl.py` for self-supervised pretraining without labels, and then run `main.py` for fine-tuning with labels.
+`run_ssl.sh`: first run `main_ssl.py` for self-supervised pretraining without labels, and then run `main.py` for fine-tuning with labels.  
+Currently, we implement two types of augmentation for contrastive self-supervised learning: random node masking and random edge perturbation. Will implement node dropping and subgraph sampling in the future.
