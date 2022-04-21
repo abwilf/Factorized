@@ -70,6 +70,22 @@ def train_model_social():
         assert gc['net'] == 'factorized', f'gc[net]needs to be factorized but is {gc["net"]}'
 
     model = Solograph()
+    if gc["pretrain_finetune"]: # Self-supervised uses file is for fine-tune
+        print("Running finetuning from pretrained model")
+        assert (gc['net'], gc['dataset']) == ('factorized', 'social') # only implemented on factorized social iq
+        # Load pretrained contrastive learning weights,
+        # https://pytorch.org/tutorials/beginner/saving_loading_models.html
+        print("Loading pretrained model from " + gc['model_path'])
+        pretrained_dict = torch.load(gc['model_path'])
+        model_dict = model.state_dict()
+        # Load everything except the projection head
+        # 1. filter out unnecessary keys
+        pretrained_dict = {k: v for k, v in pretrained_dict.items() if k in model_dict}
+        # 2. overwrite entries in the existing state dict
+        model_dict.update(pretrained_dict)
+        # 3. load the new state dict
+        model.load_state_dict(model_dict)
+
 
     if train_loader is None: # cache train and dev loader so skip data loading in multiple iterations
         print('Building loaders for social')
