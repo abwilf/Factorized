@@ -83,7 +83,7 @@ defaults = [
     ("--flip_test_order", int, 0),
     ("--flip_train_order", int, 0),
 
-    ("--out_dir", str, '/work/qianlim/mtag/MTAG/results/hash1'),
+    ("--out_dir", str, '/work/awilf/MTAG/results/hash1'),
     ("--trials", int, 1),
     ("--train_block", int, 1),
     ("--test_block", int, 1),
@@ -102,17 +102,17 @@ defaults = [
 
 
         # Other settings, these are likely to be fixed all the time
-    ("--log_dir", str, '/work/qianlim/mtag/MTAG/debug'),
+    ("--log_dir", str, '/work/awilf/MTAG/debug'),
     ("--eval", bool, False),
     ("--resume_pt", str, None),
 
     ("--single_gpu", bool, True),
     ("--load_model", bool, False),
     ("--pretrain_finetune", bool, False),
-    ("--model_path", str, '/work/qianlim/mtag/MTAG/saved_model/model.pt'),
+    ("--model_path", str, '/work/awilf/MTAG/saved_model/model.pt'),
     ("--save_grad", bool, False),
     ("--dataset", str, "social"),
-    ("--data_path", str, "/work/qianlim/mtag/MTAG/data"),
+    ("--data_path", str, "/work/awilf/MTAG/data"),
     ("--log_path", str, None),
     ("--padding_len", int, -1),
     ("--include_zero", bool, True),
