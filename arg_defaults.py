@@ -83,7 +83,7 @@ defaults = [
     ("--flip_test_order", int, 0),
     ("--flip_train_order", int, 0),
 
-    ("--out_dir", str, '/work/awilf/MTAG/results/hash1'),
+    ("--out_dir", str, '/work/qianlim/mtag/MTAG/results/hash1'),
     ("--trials", int, 1),
     ("--train_block", int, 1),
     ("--test_block", int, 1),
@@ -92,17 +92,27 @@ defaults = [
     ("--use_qa_self_conn", int, 1),
     ("--use_mod_conn", int, 1),
 
+    # Data augmentation for self-supervised contrastive learning
+
+    ('--drop_nodes', int, 0),
+    ('--permute_edges', int, 0),
+    ('--subgraph', int, 0),
+    ('--mask_nodes', int, 0),
+    ('--temperature', float, 1.0),
+
 
         # Other settings, these are likely to be fixed all the time
-    ("--log_dir", str, '/work/awilf/MTAG/debug'),
+    ("--log_dir", str, '/work/qianlim/mtag/MTAG/debug'),
     ("--eval", bool, False),
     ("--resume_pt", str, None),
 
     ("--single_gpu", bool, True),
     ("--load_model", bool, False),
+    ("--pretrain_finetune", bool, False),
+    ("--model_path", str, '/work/qianlim/mtag/MTAG/saved_model/model.pt'),
     ("--save_grad", bool, False),
     ("--dataset", str, "social"),
-    ("--data_path", str, "/work/awilf/MTAG/data"),
+    ("--data_path", str, "/work/qianlim/mtag/MTAG/data"),
     ("--log_path", str, None),
     ("--padding_len", int, -1),
     ("--include_zero", bool, True),
@@ -119,4 +129,5 @@ defaults = [
     ('--return_layer_outputs', int, 0),
     ('--save_best_model', int, 0),
     ('--use_residual', int, 0),
+    
 ]
