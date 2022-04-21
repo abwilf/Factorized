@@ -100,3 +100,7 @@ webencodings
 widgetsnbextension
 yacs
 zipp
+opencv-python
+wget
+Cython
+nemo_toolkit['all']
