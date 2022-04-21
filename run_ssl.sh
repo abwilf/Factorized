@@ -12,9 +12,9 @@ python main_ssl.py \
 --num_gat_layers 2 \
 --scene_mean 1 \
 --social_baseline 0 \
---out_dir /work/qianlim/mtag/MTAG/results/factorized \
---data_path /work/qianlim/mtag/MTAG/data/ \
---model_path /work/qianlim/mtag/MTAG/saved_model/model.pt \
+--out_dir /work/awilf/MTAG/results/factorized \
+--data_path /work/awilf/MTAG/data/ \
+--model_path /work/awilf/MTAG/saved_model/model.pt \
 --trials 1 \
 --seq_len 25 \
 --dataset social \
@@ -43,9 +43,9 @@ python main.py \
 --num_gat_layers 2 \
 --scene_mean 1 \
 --social_baseline 0 \
---out_dir /work/qianlim/mtag/MTAG/results/factorized \
---data_path /work/qianlim/mtag/MTAG/data/ \
---model_path /work/qianlim/mtag/MTAG/saved_model/model.pt \
+--out_dir /work/awilf/MTAG/results/factorized \
+--data_path /work/awilf/MTAG/data/ \
+--model_path /work/awilf/MTAG/saved_model/model.pt \
 --trials 1 \
 --seq_len 25 \
 --dataset social \
