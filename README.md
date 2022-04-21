@@ -93,3 +93,5 @@ To run on mosi, use `bash run_mosi.py`.
 `models/factorized.py`: this is where we construct the graphs and define the factorized model.
 `models/mosi.py`: contains data processing in model creation for mosi
 
+## Self-supervised
+`run_ssl.sh`: first run `main_ssl.py` for self-supervised pretraining without labels, and then run `main.py` for fine-tuning with labels.
