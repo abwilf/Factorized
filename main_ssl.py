@@ -29,7 +29,7 @@ from models.common import *
 from models.graph_builder import construct_time_aware_dynamic_graph, build_time_aware_dynamic_graph_uni_modal, build_time_aware_dynamic_graph_cross_modal
 from models.global_const import gc
 from models.mosi import*
-import sys; sys.path.append('/work/qianlim/mtag/Standard-Grid'); import standard_grid
+import sys; sys.path.append('/work/awilf/Standard-Grid'); import standard_grid
 
 
 import gc as g
